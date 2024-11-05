@@ -6,14 +6,25 @@
 
 import { board, input, output } from "@breadboard-ai/build";
 import { code } from "@google-labs/core-kit";
+import { anyOf, object, array, partType } from "@breadboard-ai/build";
 
+// eslint-disable-next-line no-var
 declare global {
-  // eslint-disable-next-line no-var
+  type AICreateMonitorCallback = (status: { state: string }) => void;
+  type AILanguageModelInitialPromptRole = 'system' | 'user' | 'assistant';
+  type AILanguageModelInitialPrompt = {
+    role: AILanguageModelInitialPromptRole;
+    content: string;
+  };
+  type AICapabilityAvailability = 'readily' | 'no';
   var ai: {
     languageModel: {
-      create: () => Promise<{ prompt: (text: string) => Promise<string> }>;
+      create: (options?: { signal?: AbortSignal, monitor?: AICreateMonitorCallback, systemPrompt?: string, initialPrompts?: AILanguageModelInitialPrompt[], topK?: number, temperature?: number }) => Promise<{ prompt: (text: string) => Promise<string> }>;
       capabilities: () => Promise<{
-        available: 'readily', defaultTopK: 3, maxTopK: 8, defaultTemperature: 1
+        available: AICapabilityAvailability;
+        defaultTopK: number;
+        maxTopK: number;
+        defaultTemperature: number;
       }>;
     }
   };
@@ -24,6 +35,43 @@ const prompt = input({
   description: "The prompt to generate text from",
 });
 
+const systemPrompt = input({
+  type: anyOf("string", object({ parts: array(partType) })),
+  title: "System Prompt",
+  description: "Optional system prompt for the model",
+  default: "",
+});
+
+const initialPrompts = input({
+  type: array(object({
+    role: anyOf("system", "user", "assistant"),
+    content: "string"
+  })),
+  title: "Initial Prompts",
+  description: "Optional array of initial prompts with roles",
+  default: [],
+});
+
+const topK = input({
+  type: "number",
+  title: "Top K",
+  description: "Optional top-k parameter for text generation",
+  default: 1,
+});
+
+const temperature = input({
+  type: "number",
+  title: "Temperature",
+  description: "Optional temperature parameter for text generation",
+  default: 0,
+});
+
+const monitor = input({
+  type: anyOf("function", undefined),
+  title: "Monitor",
+  description: "Optional callback to monitor generation status",
+});
+
 const { text } = code(
   {
     $metadata: {
@@ -31,9 +79,28 @@ const { text } = code(
       description: "Invoking the Prompt API to generate text from a prompt",
     },
     prompt,
+    systemPrompt,
+    initialPrompts,
+    topK,
+    temperature,
+    monitor,
   },
   { text: "string" },
-  async ({ prompt }: { prompt: string }) => {
+  async ({ 
+    prompt, 
+    systemPrompt, 
+    initialPrompts, 
+    topK, 
+    temperature, 
+    monitor 
+  }: { 
+    prompt: string;
+    systemPrompt: string | { parts: any[] };
+    initialPrompts?: AILanguageModelInitialPrompt[];
+    topK?: number;
+    temperature?: number;
+    monitor?: AICreateMonitorCallback;
+  }) => {
     const ERROR_MESSAGE =
       "Prompt API is not available. For more information, see https://developer.chrome.com/docs/ai/built-in.";
 
@@ -46,7 +113,13 @@ const { text } = code(
     if (!canAI) {
       throw new Error(ERROR_MESSAGE);
     }
-    const session = await ai.languageModel.create();
+    const session = await ai.languageModel.create({
+      systemPrompt: typeof systemPrompt === 'string' ? systemPrompt : '',
+      initialPrompts: initialPrompts || [],
+      topK,
+      temperature,
+      monitor
+    });
     const text = (await session.prompt(prompt)) as string;
     return { text };
   }

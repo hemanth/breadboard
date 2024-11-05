@@ -38,6 +38,54 @@
               "type": "string",
               "title": "Text",
               "examples": []
+            },
+            "systemPrompt": {
+              "type": "string",
+              "title": "System Prompt",
+              "format": "multiline"
+            },
+            "initialPrompts": {
+              "type": "array",
+              "title": "Initial Prompts",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "role": {
+                    "type": "string",
+                    "enum": ["system", "user", "assistant"],
+                    "title": "Role"
+                  },
+                  "content": {
+                    "type": "string",
+                    "title": "Content",
+                    "format": "multiline"
+                  }
+                },
+                "required": ["role", "content"]
+              }
+            },
+            "monitor": {
+              "type": "object",
+              "title": "Monitor Callback",
+              "properties": {
+                "state": {
+                  "type": "string",
+                  "title": "State"
+                }
+              }
+            },
+            "topK": {
+              "type": "integer",
+              "title": "Top K",
+              "minimum": 1,
+              "default": 3
+            },
+            "temperature": {
+              "type": "number",
+              "title": "Temperature",
+              "minimum": 0,
+              "maximum": 1,
+              "default": 1
             }
           },
           "type": "object",
