@@ -47,7 +47,6 @@ import {
 } from "./runtime/types";
 import { createPastRunObserver } from "./utils/past-run-observer";
 import { getRunNodeConfig } from "./utils/run-node";
-import { TopGraphObserver } from "../../shared-ui/dist/utils/top-graph-observer";
 import {
   createTokenVendor,
   TokenVendor,
@@ -879,7 +878,8 @@ export class Main extends LitElement {
       target instanceof HTMLInputElement ||
       target instanceof HTMLTextAreaElement ||
       target instanceof HTMLSelectElement ||
-      target instanceof HTMLCanvasElement
+      target instanceof HTMLCanvasElement ||
+      target instanceof BreadboardUI.Elements.ModuleEditor
     );
   }
 
@@ -1996,7 +1996,7 @@ export class Main extends LitElement {
         const observers = this.#runtime?.run.getObservers(this.tab?.id ?? null);
         const topGraphResult =
           observers?.topGraphObserver?.current() ??
-          TopGraphObserver.entryResult(this.tab?.graph);
+          BreadboardUI.Utils.TopGraphObserver.entryResult(this.tab?.graph);
         const inputsFromLastRun = runs[1]?.inputs() ?? null;
         const tabURLs = this.#runtime.board.getTabURLs();
         const showNodeTypeDescriptions =
@@ -2354,7 +2354,7 @@ export class Main extends LitElement {
                   // We should probably have some way to codify the shape.
                   const invocationResult =
                     await this.#runtime.run.invokeSideboard(
-                      this.tab!.kits,
+                      this.tab!.boardServerKits,
                       "/side-boards/enhance-configuration.bgl.json",
                       this.#runtime.board.getLoader(),
                       { config },
@@ -3045,7 +3045,7 @@ export class Main extends LitElement {
               .moduleId=${this.tab?.moduleId ?? null}
               .runs=${runs ?? null}
               .topGraphResult=${topGraphResult}
-              .kits=${this.tab?.kits ?? []}
+              .boardServerKits=${this.tab?.boardServerKits ?? []}
               .loader=${this.#runtime.board.getLoader()}
               .status=${tabStatus}
               .boardId=${this.#boardId}
@@ -3101,6 +3101,21 @@ export class Main extends LitElement {
                     runner.run(data);
                   }
                 }
+              }}
+              @bbnodecreatereference=${async (
+                evt: BreadboardUI.Events.NodeCreateReferenceEvent
+              ) => {
+                if (!this.tab) {
+                  return;
+                }
+
+                await this.#runtime.edit.createReference(
+                  this.tab,
+                  evt.graphId,
+                  evt.nodeId,
+                  evt.portId,
+                  evt.value
+                );
               }}
               @bbeditorpositionchange=${(
                 evt: BreadboardUI.Events.EditorPointerPositionChangeEvent

@@ -50,6 +50,10 @@ class Graph implements InspectableGraph {
     return this.#descriptor();
   }
 
+  mainGraphDescriptor(): GraphDescriptor {
+    return this.#mutable.graph;
+  }
+
   imperative(): boolean {
     return !!this.main();
   }
@@ -65,22 +69,6 @@ class Graph implements InspectableGraph {
   nodesByType(type: NodeTypeIdentifier): InspectableNode[] {
     return this.#mutable.nodes.byType(type, this.#graphId);
   }
-
-  // TODO: Remove this
-  // async describeNodeType(
-  //   id: NodeIdentifier,
-  //   type: NodeTypeIdentifier,
-  //   options: NodeTypeDescriberOptions = {}
-  // ): Promise<NodeDescriberResult> {
-  //   const manager = NodeTypeDescriberManager.create(
-  //     this.#graphId,
-  //     this.#mutable
-  //   );
-  //   if (!manager.success) {
-  //     throw new Error(`Inspect API Integrity Error: ${manager.error}`);
-  //   }
-  //   return manager.result.describeNodeType(id, type, options);
-  // }
 
   nodeById(id: NodeIdentifier) {
     return new GraphQueries(this.#mutable, this.#graphId).nodeById(id);
