@@ -13,6 +13,8 @@ import {
   InspectableNodePorts,
   InspectablePort,
   NodeHandlerMetadata,
+  NodeIdentifier,
+  PortIdentifier,
   PortStatus,
 } from "@google-labs/breadboard";
 import * as PIXI from "pixi.js";
@@ -24,6 +26,7 @@ import {
   ComponentExpansionState,
   GRAPH_OPERATIONS,
   GraphNodePortType,
+  GraphReferences,
   LayoutInfo,
   SideEdge,
   VisualMetadata,
@@ -80,6 +83,7 @@ export class Graph extends PIXI.Container {
   #edgeValues: TopGraphEdgeValues | null = null;
   #nodeInfo: TopGraphNodeInfo | null = null;
   #selectionState: GraphSelectionState | null = null;
+  #references: GraphReferences | null = null;
 
   #isInitialDraw = true;
   #minimized = false;
@@ -420,7 +424,7 @@ export class Graph extends PIXI.Container {
 
       const path = evt.composedPath();
       const topTarget = path[path.length - 1];
-      const isSameGraph = topTarget.parent.parent === this;
+      const isSameGraph = topTarget?.parent?.parent === this;
 
       if (
         topTarget instanceof GraphNodePort &&
@@ -538,6 +542,11 @@ export class Graph extends PIXI.Container {
 
       const path = evt.composedPath();
       const topTarget = path[path.length - 1] as PIXI.Graphics;
+
+      // pointer target might be outside of the graph altogether.
+      if (!topTarget) {
+        return;
+      }
 
       // Take a copy of the info we need.
       const targetNodePort = nodePortBeingEdited;
@@ -766,7 +775,14 @@ export class Graph extends PIXI.Container {
       }
 
       if (child instanceof GraphNode) {
-        graphSelection.nodes.add(child.label);
+        // If the graph node has as hit zone, use that.
+        if (child.hitZone) {
+          if (rect.intersects(child.hitZone, child.worldTransform)) {
+            graphSelection.nodes.add(child.label);
+          }
+        } else {
+          graphSelection.nodes.add(child.label);
+        }
       } else if (child instanceof GraphComment) {
         graphSelection.comments.add(child.label);
       }
@@ -1094,6 +1110,15 @@ export class Graph extends PIXI.Container {
     return this.#showNodeTypeDescriptions;
   }
 
+  set references(references: GraphReferences | null) {
+    this.#references = references;
+    this.#isDirty = true;
+  }
+
+  get references() {
+    return this.#references;
+  }
+
   set edges(edges: InspectableEdge[] | null) {
     // Validate the edges.
     this.#edges =
@@ -1286,6 +1311,22 @@ export class Graph extends PIXI.Container {
     }
 
     return visualState;
+  }
+
+  intersectingBoardPort(
+    point: PIXI.PointData
+  ): { nodeId: NodeIdentifier; portId: PortIdentifier } | false {
+    for (const node of this.children) {
+      if (!(node instanceof GraphNode)) {
+        continue;
+      }
+
+      if (node.getBounds().containsPoint(point.x, point.y)) {
+        return node.intersectingBoardPort(point);
+      }
+    }
+
+    return false;
   }
 
   #edgesBetween(from: GraphNode, to: GraphNode): InspectableEdge[] {
@@ -1626,6 +1667,10 @@ export class Graph extends PIXI.Container {
       if (graphNode.title !== node.title()) {
         graphNode.title = node.title();
       }
+
+      const graphNodeReferences =
+        this.#references?.get(graphNode.label) ?? null;
+      graphNode.references = graphNodeReferences;
 
       if (icon && GraphAssets.instance().has(icon)) {
         graphNode.icon = icon;

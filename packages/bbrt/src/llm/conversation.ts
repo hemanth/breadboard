@@ -6,82 +6,35 @@
 
 import { Signal } from "signal-polyfill";
 import { SignalArray } from "signal-utils/array";
-import type { SignalSet } from "signal-utils/set";
 import type { BBRTDriver } from "../drivers/driver-interface.js";
-import type { BBRTTool, InvokeResult, ToolInvocation } from "../tools/tool.js";
+import type { BBRTTool, ToolInvocation } from "../tools/tool.js";
 import { BufferedMultiplexStream } from "../util/buffered-multiplex-stream.js";
 import { Lock } from "../util/lock.js";
+import { coercePresentableError } from "../util/presentable-error.js";
 import type { Result } from "../util/result.js";
 import { transposeResults } from "../util/transpose-results.js";
 import { waitForState } from "../util/wait-for-state.js";
 import type { BBRTChunk } from "./chunk.js";
-
-// TODO(aomarks) Consider making this whole thing a SignalObject.
-export type BBRTTurn = BBRTUserTurn | BBRTModelTurn | BBRTErrorTurn;
-
-export type BBRTUserTurn = BBRTUserTurnContent | BBRTUserTurnToolResponses;
-
-export type BBRTTurnStatus =
-  | "pending"
-  | "streaming"
-  | "using-tools"
-  | "done"
-  | "error";
-
-export interface BBRTUserTurnContent {
-  kind: "user-content";
-  role: "user";
-  status: Signal.State<BBRTTurnStatus>;
-  content: string;
-}
-
-export interface BBRTUserTurnToolResponses {
-  kind: "user-tool-responses";
-  role: "user";
-  status: Signal.State<BBRTTurnStatus>;
-  responses: BBRTToolResponse[];
-}
-
-export interface BBRTModelTurn {
-  kind: "model";
-  role: "model";
-  status: Signal.State<BBRTTurnStatus>;
-  content: AsyncIterable<string>;
-  toolCalls?: SignalArray<BBRTToolCall>;
-  error?: unknown;
-}
-
-export interface BBRTErrorTurn {
-  kind: "error";
-  role: "user" | "model";
-  status: Signal.State<BBRTTurnStatus>;
-  error: unknown;
-}
-
-export interface BBRTToolCall {
-  id: string;
-  tool: BBRTTool;
-  args: unknown;
-  invocation: ToolInvocation;
-}
-
-export interface BBRTToolResponse {
-  id: string;
-  tool: BBRTTool;
-  invocation: ToolInvocation;
-  args: unknown;
-  response: InvokeResult;
-}
+import type {
+  BBRTModelTurn,
+  BBRTToolCall,
+  BBRTToolResponse,
+  BBRTTurn,
+  BBRTTurnStatus,
+} from "./conversation-types.js";
 
 export class BBRTConversation {
   readonly turns = new SignalArray<BBRTTurn>();
   readonly #lock = new Lock();
   readonly #driver: Signal.State<BBRTDriver>;
-  readonly #tools: SignalSet<BBRTTool>;
+  readonly #activeTools: Signal.Computed<Set<BBRTTool>>;
 
-  constructor(driver: Signal.State<BBRTDriver>, tools: SignalSet<BBRTTool>) {
+  constructor(
+    driver: Signal.State<BBRTDriver>,
+    activeTools: Signal.Computed<Set<BBRTTool>>
+  ) {
     this.#driver = driver;
-    this.#tools = tools;
+    this.#activeTools = activeTools;
   }
 
   send(message: { content: string }): Promise<void> {
@@ -136,7 +89,8 @@ export class BBRTConversation {
     const modelResponse = await this.#generate();
     if (!modelResponse.ok) {
       status.set("error");
-      modelTurn.error = modelResponse.error;
+      const error = coercePresentableError(modelResponse.error);
+      modelTurn.error = error;
       // TODO(aomarks) Use a new "using" statement for this, with broad scope.
       // Same for lock.
       void contentStream.writable.close();
@@ -147,7 +101,7 @@ export class BBRTConversation {
         kind: "error",
         role: "model",
         status,
-        error: modelResponse.error,
+        error,
       });
       return;
     }
@@ -166,7 +120,7 @@ export class BBRTConversation {
           // we should preserve order, so maybe it should be some other data
           // structure really.
           const tool = await (async () => {
-            for (const tool of this.#tools) {
+            for (const tool of this.#activeTools.get()) {
               if (tool.metadata.id === chunk.name) {
                 return tool;
               }
@@ -184,6 +138,7 @@ export class BBRTConversation {
             break;
           }
           const invocation = tool.invoke(chunk.arguments);
+          invocation.start();
           toolCalls.push({
             id: chunk.id,
             args: chunk.arguments,
@@ -215,7 +170,8 @@ export class BBRTConversation {
         return this.#send({ toolResponses: toolResponses.value });
       } else {
         status.set("error");
-        modelTurn.error = toolResponses.error;
+        const error = coercePresentableError(toolResponses.error);
+        modelTurn.error = error;
         // TODO(aomarks) Remove once we render errors directly on turns. Though,
         // be careful here, since if we add retry, we don't want to retry the
         // whole turn, just the model call. Maybe we need a turn role for tool
@@ -224,7 +180,7 @@ export class BBRTConversation {
           kind: "error",
           role: "model",
           status,
-          error: toolResponses.error,
+          error,
         });
       }
     }
@@ -260,7 +216,9 @@ export class BBRTConversation {
 
   async #generate(): Promise<Result<AsyncIterableIterator<BBRTChunk>>> {
     const driver = this.#driver.get();
-    const chunks = await driver.executeTurn(this.turns, [...this.#tools]);
+    const chunks = await driver.executeTurn(this.turns, [
+      ...this.#activeTools.get(),
+    ]);
     if (!chunks.ok) {
       return chunks;
     }

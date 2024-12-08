@@ -35,6 +35,7 @@ import {
   InspectableGraph,
   InspectablePort,
   NodeIdentifier,
+  PortIdentifier,
   Schema,
 } from "@google-labs/breadboard";
 import { GraphNode } from "./graph-node.js";
@@ -110,6 +111,9 @@ export class GraphRenderer extends LitElement {
 
   @property()
   selectionChangeId: WorkspaceSelectionChangeId | null = null;
+
+  @property()
+  graphTopologyUpdateId: number = 0;
 
   @property()
   moveToSelection: WorkspaceSelectionStateWithChangeId["moveToSelection"] =
@@ -637,6 +641,10 @@ export class GraphRenderer extends LitElement {
   }
 
   protected shouldUpdate(changedProperties: PropertyValues): boolean {
+    if (changedProperties.has("graphTopologyUpdateId")) {
+      return true;
+    }
+
     if (changedProperties.has("_portTooltip")) {
       return false;
     }
@@ -955,6 +963,30 @@ export class GraphRenderer extends LitElement {
 
       this.#removeGraph(graph);
     }
+  }
+
+  intersectingBoardPort(point: PIXI.PointData):
+    | {
+        graphId: GraphIdentifier;
+        nodeId: NodeIdentifier;
+        portId: PortIdentifier;
+      }
+    | false {
+    for (const graph of this.#container.children) {
+      if (!(graph instanceof Graph)) {
+        continue;
+      }
+
+      if (graph.getBounds().containsPoint(point.x, point.y)) {
+        const port = graph.intersectingBoardPort(point);
+        if (port) {
+          return { graphId: graph.subGraphId ?? MAIN_BOARD_ID, ...port };
+        }
+        return false;
+      }
+    }
+
+    return false;
   }
 
   toContainerCoordinates(point: PIXI.PointData) {
@@ -2128,6 +2160,10 @@ export class GraphRenderer extends LitElement {
 
     if (opts.selectionState !== undefined) {
       graph.selectionState = opts.selectionState;
+    }
+
+    if (opts.references !== undefined) {
+      graph.references = opts.references;
     }
 
     graph.subGraphId = subGraphId;
