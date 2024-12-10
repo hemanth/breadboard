@@ -13,6 +13,8 @@ import {
   InspectableNodePorts,
   InspectablePort,
   NodeHandlerMetadata,
+  NodeIdentifier,
+  PortIdentifier,
   PortStatus,
 } from "@google-labs/breadboard";
 import * as PIXI from "pixi.js";
@@ -24,6 +26,7 @@ import {
   ComponentExpansionState,
   GRAPH_OPERATIONS,
   GraphNodePortType,
+  GraphReferences,
   LayoutInfo,
   SideEdge,
   VisualMetadata,
@@ -42,6 +45,7 @@ import {
   EdgeData,
   GraphSelectionState,
   GraphVisualState,
+  ReferenceIdentifier,
   TopGraphEdgeValues,
   TopGraphNodeInfo,
   cloneEdgeData,
@@ -80,6 +84,7 @@ export class Graph extends PIXI.Container {
   #edgeValues: TopGraphEdgeValues | null = null;
   #nodeInfo: TopGraphNodeInfo | null = null;
   #selectionState: GraphSelectionState | null = null;
+  #references: GraphReferences | null = null;
 
   #isInitialDraw = true;
   #minimized = false;
@@ -241,13 +246,13 @@ export class Graph extends PIXI.Container {
       // Clean all edges.
       for (const edge of this.#edgeContainer.children) {
         edge.removeFromParent();
-        edge.destroy();
+        edge.destroy({ children: true });
       }
 
       // Clean all nodes.
       for (const node of this.#graphNodeById.values()) {
         node.removeFromParent();
-        node.destroy();
+        node.destroy({ children: true });
       }
 
       this.#edgeGraphics.clear();
@@ -420,7 +425,7 @@ export class Graph extends PIXI.Container {
 
       const path = evt.composedPath();
       const topTarget = path[path.length - 1];
-      const isSameGraph = topTarget.parent.parent === this;
+      const isSameGraph = topTarget?.parent?.parent === this;
 
       if (
         topTarget instanceof GraphNodePort &&
@@ -538,6 +543,11 @@ export class Graph extends PIXI.Container {
 
       const path = evt.composedPath();
       const topTarget = path[path.length - 1] as PIXI.Graphics;
+
+      // pointer target might be outside of the graph altogether.
+      if (!topTarget) {
+        return;
+      }
 
       // Take a copy of the info we need.
       const targetNodePort = nodePortBeingEdited;
@@ -766,7 +776,23 @@ export class Graph extends PIXI.Container {
       }
 
       if (child instanceof GraphNode) {
-        graphSelection.nodes.add(child.label);
+        // If the graph node has as hit zone, use that.
+        if (child.hitZone) {
+          if (rect.intersects(child.hitZone, child.worldTransform)) {
+            graphSelection.nodes.add(child.label);
+          }
+        } else {
+          graphSelection.nodes.add(child.label);
+        }
+
+        for (const reference of child.referenceRects()) {
+          if (!rect.intersects(reference.rect)) {
+            continue;
+          }
+
+          const id = `${child.label}|${reference.id}` as ReferenceIdentifier;
+          graphSelection.references.add(id);
+        }
       } else if (child instanceof GraphComment) {
         graphSelection.comments.add(child.label);
       }
@@ -1094,6 +1120,15 @@ export class Graph extends PIXI.Container {
     return this.#showNodeTypeDescriptions;
   }
 
+  set references(references: GraphReferences | null) {
+    this.#references = references;
+    this.#isDirty = true;
+  }
+
+  get references() {
+    return this.#references;
+  }
+
   set edges(edges: InspectableEdge[] | null) {
     // Validate the edges.
     this.#edges =
@@ -1286,6 +1321,41 @@ export class Graph extends PIXI.Container {
     }
 
     return visualState;
+  }
+
+  intersectingBoardPort(
+    point: PIXI.PointData
+  ): { nodeId: NodeIdentifier; portId: PortIdentifier } | false {
+    for (const node of this.children) {
+      if (!(node instanceof GraphNode)) {
+        continue;
+      }
+
+      if (node.getBounds().containsPoint(point.x, point.y)) {
+        return node.intersectingBoardPort(point);
+      }
+    }
+
+    return false;
+  }
+
+  highlightForBoardPort(nodeId: NodeIdentifier) {
+    const node = this.getChildByLabel(nodeId);
+    if (!(node instanceof GraphNode)) {
+      return;
+    }
+
+    node.highlightForBoardPort = true;
+  }
+
+  removeHighlightForBoardPort() {
+    for (const node of this.children) {
+      if (!(node instanceof GraphNode)) {
+        continue;
+      }
+
+      node.highlightForBoardPort = false;
+    }
   }
 
   #edgesBetween(from: GraphNode, to: GraphNode): InspectableEdge[] {
@@ -1530,6 +1600,19 @@ export class Graph extends PIXI.Container {
           }
         );
 
+        graphNode.on(
+          GRAPH_OPERATIONS.GRAPH_REFERENCE_TOGGLE_SELECTED,
+          (portId: PortIdentifier, index: number, isCtrlCommand: boolean) => {
+            this.emit(
+              GRAPH_OPERATIONS.GRAPH_REFERENCE_TOGGLE_SELECTED,
+              graphNode!.label,
+              portId,
+              index,
+              isCtrlCommand
+            );
+          }
+        );
+
         graphNode.on(GRAPH_OPERATIONS.GRAPH_NODE_DRAWN, () => {
           const node = graphNode!;
           const layout = this.#layout.get(node.label) || null;
@@ -1627,6 +1710,10 @@ export class Graph extends PIXI.Container {
         graphNode.title = node.title();
       }
 
+      const graphNodeReferences =
+        this.#references?.get(graphNode.label) ?? null;
+      graphNode.references = graphNodeReferences;
+
       if (icon && GraphAssets.instance().has(icon)) {
         graphNode.icon = icon;
       } else if (GraphAssets.instance().has(type)) {
@@ -1663,7 +1750,36 @@ export class Graph extends PIXI.Container {
         continue;
       }
 
-      graphNode.selected = this.#selectionState?.nodes.has(id) ?? false;
+      const selectedReferences = new Map<PortIdentifier, number[]>();
+      if (this.#selectionState) {
+        graphNode.selected = this.#selectionState.nodes.has(id) ?? false;
+        for (const reference of this.#selectionState.references) {
+          if (reference.startsWith(id)) {
+            const portAndIndex = reference.replace(id, "");
+            const split = portAndIndex.lastIndexOf("|");
+            if (split === -1) {
+              continue;
+            }
+
+            const portId = portAndIndex.slice(1, split);
+            const indexStr = portAndIndex.slice(split + 1);
+            const index = Number.parseInt(indexStr);
+            if (Number.isNaN(index)) {
+              continue;
+            }
+
+            let selected = selectedReferences.get(portId);
+            if (!selected) {
+              selected = [];
+              selectedReferences.set(portId, selected);
+            }
+
+            selected.push(index);
+          }
+        }
+      }
+
+      graphNode.selectedReferences = selectedReferences;
       graphNode.label = id;
       graphNode.readOnly = this.readOnly;
       // Modules must go first because if any of the in ports specify a ModuleId

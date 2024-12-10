@@ -72,7 +72,7 @@ export class UI extends LitElement {
   inputsFromLastRun: InspectableRunInputs | null = null;
 
   @property()
-  kits: Kit[] = [];
+  boardServerKits: Kit[] = [];
 
   @property()
   loader: GraphLoader | null = null;
@@ -127,6 +127,9 @@ export class UI extends LitElement {
 
   @property()
   graphTopologyUpdateId: number = 0;
+
+  @property()
+  graphStoreUpdateId: number = 0;
 
   @state()
   debugEvent: InspectableRunEvent | null = null;
@@ -285,7 +288,7 @@ export class UI extends LitElement {
       [
         graph,
         run,
-        this.kits,
+        this.boardServerKits,
         this.topGraphResult,
         this.history,
         this.editorRender,
@@ -331,6 +334,7 @@ export class UI extends LitElement {
           .selectionState=${this.selectionState}
           .visualChangeId=${this.visualChangeId}
           .graphTopologyUpdateId=${this.graphTopologyUpdateId}
+          .boardServers=${this.boardServers}
           @bbrunboard=${() => {
             this.sideNavItem = "activity";
           }}
@@ -436,14 +440,14 @@ export class UI extends LitElement {
             </div>
           </h1>
           ${guard(
-            [graph, this.mode, this.selectionState, this.graphTopologyUpdateId],
+            [graph, this.mode, this.selectionState, this.graphStoreUpdateId],
             () => {
               return html`<bb-workspace-outline
                 .graph=${graph}
                 .renderId=${globalThis.crypto.randomUUID()}
                 .mode=${this.mode}
                 .selectionState=${this.selectionState}
-                .graphTopologyUpdateId=${this.graphTopologyUpdateId}
+                .graphStoreUpdateId=${this.graphStoreUpdateId}
               ></bb-workspace-outline>`;
             }
           )}`;
@@ -458,12 +462,13 @@ export class UI extends LitElement {
 
       case "components": {
         sideNavItem = html`${guard(
-          [this.kits, this.graphTopologyUpdateId, this.mainGraphId],
+          [this.boardServerKits, this.graphStoreUpdateId, this.mainGraphId],
           () =>
             html`<h1 id="side-nav-title">Components</h1>
               <bb-component-selector
-                .graphTopologyUpdateId=${this.graphTopologyUpdateId}
-                .boardServerKits=${this.kits}
+                .graphStoreUpdateId=${this.graphStoreUpdateId}
+                .showExperimentalComponents=${showExperimentalComponents}
+                .boardServerKits=${this.boardServerKits}
                 .graphStore=${this.graphStore}
                 .mainGraphId=${this.mainGraphId}
               ></bb-component-selector>`

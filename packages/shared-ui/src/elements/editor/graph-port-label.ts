@@ -114,6 +114,15 @@ export class GraphPortLabel extends PIXI.Container {
       this.#draw();
     };
 
+    this.on("destroyed", () => {
+      // Prevent future renderings.
+      this.#isDirty = false;
+
+      for (const child of this.children) {
+        child.destroy({ children: true });
+      }
+    });
+
     this.addEventListener("pointerover", (evt: PIXI.FederatedPointerEvent) => {
       if (!this.isConfigurable) {
         return;
