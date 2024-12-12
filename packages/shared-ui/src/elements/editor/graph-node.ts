@@ -7,6 +7,8 @@
 import {
   InspectableModules,
   InspectablePort,
+  NodeIdentifier,
+  PortIdentifier,
   PortStatus,
 } from "@google-labs/breadboard";
 import * as PIXI from "pixi.js";
@@ -14,6 +16,7 @@ import {
   ComponentExpansionState,
   GRAPH_OPERATIONS,
   GraphNodePortType,
+  GraphNodeReferences,
 } from "./types.js";
 import { GraphNodePort } from "./graph-node-port.js";
 import { GraphOverflowMenu } from "./graph-overflow-menu.js";
@@ -27,6 +30,12 @@ import { GraphNodePortList } from "./graph-node-port-list.js";
 import { GraphPortLabel as GraphNodePortLabel } from "./graph-port-label.js";
 import { ComponentActivityItem } from "../../types/types.js";
 import { GraphNodeActivityMarker } from "./graph-node-activity-marker.js";
+import { GraphNodeReferenceContainer } from "./graph-node-reference-container.js";
+import {
+  isBoardArrayBehavior,
+  isBoardBehavior,
+  isConfigurableBehavior,
+} from "../../utils/index.js";
 
 const borderColor = getGlobalColor("--bb-neutral-500");
 const nodeTextColor = getGlobalColor("--bb-neutral-900");
@@ -35,11 +44,13 @@ const portsDividerColor = getGlobalColor("--bb-neutral-100");
 
 const selectedNodeColor = getGlobalColor("--bb-ui-600");
 const highlightForAdHocNodeColor = getGlobalColor("--bb-boards-500");
+const highlightForBoardPortNodeColor = getGlobalColor("--bb-joiner-500");
 
 const ICON_SCALE = 0.42;
 const ICON_ALPHA_OVER = 1;
 const ICON_ALPHA_OUT = 0.7;
 const MIN_NODE_WIDTH = 200;
+const MAX_NODE_TITLE_LENGTH = 30;
 
 export class GraphNode extends PIXI.Container {
   #width = 0;
@@ -63,6 +74,7 @@ export class GraphNode extends PIXI.Container {
   #portsDividerColor = portsDividerColor;
   #selectedColor = selectedNodeColor;
   #highlightForAdHocColor = highlightForAdHocNodeColor;
+  #highlightForBoardPortColor = highlightForBoardPortNodeColor;
   #textSize = 12;
   #backgroundColor = 0x333333;
   #padding = 12;
@@ -72,6 +84,8 @@ export class GraphNode extends PIXI.Container {
   #portRadius = 4;
   #background = new PIXI.Graphics();
   #collapsedPortList = new GraphNodePortList();
+  #referenceContainer = new GraphNodeReferenceContainer();
+  #references: GraphNodeReferences | null = null;
   #inPorts: InspectablePort[] | null = null;
   #inPortsData: Map<
     string,
@@ -96,17 +110,21 @@ export class GraphNode extends PIXI.Container {
     label: PIXI.Text;
     nodePort: GraphNodePort;
   }> = [];
-  #inPortLocations: Map<string, PIXI.ObservablePoint> = new Map();
-  #outPortLocations: Map<string, PIXI.ObservablePoint> = new Map();
+  #inPortLocations: Map<PortIdentifier, PIXI.ObservablePoint> = new Map();
+  #outPortLocations: Map<PortIdentifier, PIXI.ObservablePoint> = new Map();
   #modules: InspectableModules | null = null;
   #selected = false;
+  #selectedReferences: Map<PortIdentifier, number[]> | null = null;
   #highlightForAdHoc = false;
+  #highlightForBoardPort = false;
   #expansionState: ComponentExpansionState = "expanded";
   #emitCollapseToggleEventOnNextDraw = false;
 
   #showNodePreviewValues = false;
   #showNodeTypeDescriptions = false;
   #showNodeRunnerButton = false;
+  #showBoardReferenceMarkers = false;
+
   #overflowMenu = new GraphOverflowMenu();
   #headerInPort = new GraphNodePort(GraphNodePortType.IN);
   #headerOutPort = new GraphNodePort(GraphNodePortType.OUT);
@@ -118,6 +136,7 @@ export class GraphNode extends PIXI.Container {
   #runnerButton: PIXI.Sprite | null = null;
 
   readOnly = false;
+  hitZone: PIXI.Rectangle | null = null;
 
   constructor(
     id: string,
@@ -145,6 +164,28 @@ export class GraphNode extends PIXI.Container {
     this.addChild(this.#headerOutPort);
     this.addChild(this.#collapsedPortList);
     this.addChild(this.#activityMarker);
+    this.addChild(this.#referenceContainer);
+
+    this.#referenceContainer.x = -10;
+    this.#referenceContainer.y = 0;
+    this.#referenceContainer.on(
+      GRAPH_OPERATIONS.GRAPH_REFERENCE_TOGGLE_SELECTED,
+      (portId: PortIdentifier, index: number, isCtrlCommand: boolean) => {
+        this.emit(
+          GRAPH_OPERATIONS.GRAPH_REFERENCE_TOGGLE_SELECTED,
+          portId,
+          index,
+          isCtrlCommand
+        );
+      }
+    );
+
+    this.#referenceContainer.on(
+      GRAPH_OPERATIONS.GRAPH_REFERENCE_GOTO,
+      (...args: unknown[]) => {
+        this.emit(GRAPH_OPERATIONS.GRAPH_REFERENCE_GOTO, ...args);
+      }
+    );
 
     const playIcon = GraphAssets.instance().get("play-filled");
     if (playIcon) {
@@ -221,6 +262,7 @@ export class GraphNode extends PIXI.Container {
       if (this.#isDirty) {
         this.#isDirty = false;
         this.#draw();
+        this.#updateHitZone();
 
         this.emit(GRAPH_OPERATIONS.GRAPH_NODE_DRAWN);
       }
@@ -230,6 +272,15 @@ export class GraphNode extends PIXI.Container {
         this.emit(GRAPH_OPERATIONS.GRAPH_NODE_EXPAND_COLLAPSE);
       }
     };
+
+    this.on("destroyed", () => {
+      // Prevent future renderings.
+      this.#isDirty = false;
+
+      for (const child of this.children) {
+        child.destroy({ children: true });
+      }
+    });
   }
 
   addPointerEventListeners() {
@@ -245,6 +296,7 @@ export class GraphNode extends PIXI.Container {
         return;
       }
 
+      this.#lastClickTime = 0;
       if (!this.#titleText) {
         return;
       }
@@ -426,6 +478,35 @@ export class GraphNode extends PIXI.Container {
     this.#isDirty = true;
   }
 
+  set showBoardReferenceMarkers(showBoardReferenceMarkers: boolean) {
+    this.#showBoardReferenceMarkers = showBoardReferenceMarkers;
+    this.#isDirty = true;
+  }
+
+  get showBoardReferenceMarkers() {
+    return this.#showBoardReferenceMarkers;
+  }
+
+  get references() {
+    return this.#references;
+  }
+
+  set references(references: GraphNodeReferences | null) {
+    this.#references = references;
+    this.#isDirty = true;
+  }
+
+  set selectedReferences(
+    selectedReferences: Map<PortIdentifier, number[]> | null
+  ) {
+    this.#selectedReferences = selectedReferences;
+    this.#isDirty = true;
+  }
+
+  get selectedReferences() {
+    return this.#selectedReferences;
+  }
+
   get highlightForAdHoc() {
     return this.#highlightForAdHoc;
   }
@@ -435,7 +516,24 @@ export class GraphNode extends PIXI.Container {
       return;
     }
 
+    if (highlightForAdHoc === this.#highlightForAdHoc) {
+      return;
+    }
+
     this.#highlightForAdHoc = highlightForAdHoc;
+    this.#isDirty = true;
+  }
+
+  get highlightForBoardPort() {
+    return this.#highlightForBoardPort;
+  }
+
+  set highlightForBoardPort(highlightForBoardPort: boolean) {
+    if (highlightForBoardPort === this.#highlightForBoardPort) {
+      return;
+    }
+
+    this.#highlightForBoardPort = highlightForBoardPort;
     this.#isDirty = true;
   }
 
@@ -578,6 +676,7 @@ export class GraphNode extends PIXI.Container {
     this.#collapsedPortList.inPorts = ports;
     this.#inPorts = ports;
     this.#isDirty = true;
+
     if (!ports) {
       return;
     }
@@ -787,7 +886,11 @@ export class GraphNode extends PIXI.Container {
       this.showNodeTypeDescriptions && typeDiffersToTitle
         ? ` (${this.#typeTitle})`
         : "";
-    const nodeTitle = `${this.#title}${nodeType}`;
+    let nodeTitle = `${this.#title}${nodeType}`;
+    if (nodeTitle.length > MAX_NODE_TITLE_LENGTH) {
+      nodeTitle = `${nodeTitle.slice(0, MAX_NODE_TITLE_LENGTH - 3)}...`;
+    }
+
     if (this.#titleText) {
       if (this.#titleText.text !== nodeTitle) {
         this.#titleText.text = nodeTitle;
@@ -948,6 +1051,16 @@ export class GraphNode extends PIXI.Container {
     this.#drawCollapsedPortListIfNeeded();
     this.#drawActivityMarkerIfNeeded();
     this.#drawRunnerButtonIfNeeded();
+    this.#drawReferences();
+  }
+
+  #updateHitZone() {
+    this.hitZone = new PIXI.Rectangle(
+      0,
+      0,
+      this.#background.width,
+      this.#background.height
+    );
   }
 
   #drawRunnerButtonIfNeeded() {
@@ -1140,7 +1253,10 @@ export class GraphNode extends PIXI.Container {
       this.addChildAt(this.#background, 0);
     }
 
-    const borderSize = this.selected || this.#highlightForAdHoc ? 2 : 1;
+    const borderSize =
+      this.selected || this.#highlightForAdHoc || this.#highlightForBoardPort
+        ? 2
+        : 1;
     this.#background.beginPath();
     this.#background.roundRect(
       -borderSize,
@@ -1153,9 +1269,11 @@ export class GraphNode extends PIXI.Container {
     this.#background.fill({
       color: this.#highlightForAdHoc
         ? this.#highlightForAdHocColor
-        : this.selected
-          ? this.#selectedColor
-          : this.#borderColor,
+        : this.#highlightForBoardPort
+          ? this.#highlightForBoardPortColor
+          : this.selected
+            ? this.#selectedColor
+            : this.#borderColor,
     });
 
     this.#background.beginPath();
@@ -1241,14 +1359,28 @@ export class GraphNode extends PIXI.Container {
         continue;
       }
       const { port, label, nodePort } = portItem;
+      const isBoard =
+        isBoardBehavior(port.schema) || isBoardArrayBehavior(port.schema);
+      const hidePortBubble =
+        (isConfigurableBehavior(port.schema) || port.configured) &&
+        !isBoard &&
+        this.#expansionState !== "advanced" &&
+        port.edges.length === 0;
+
       nodePort.label = port.name;
-      nodePort.radius = this.#portRadius;
+      nodePort.radius = hidePortBubble ? 0 : this.#portRadius;
       nodePort.x = 0;
       nodePort.y = portY + this.#textSize * 0.5 + 0.5;
       nodePort.overrideStatus = null;
       nodePort.status = port.status;
       nodePort.configured = port.configured && port.edges.length === 0;
       nodePort.visible = true;
+      nodePort.readOnly =
+        isConfigurableBehavior(port.schema) &&
+        this.#expansionState !== "advanced";
+
+      nodePort.showBoardReferenceMarker =
+        isBoard && this.#showBoardReferenceMarkers;
 
       this.#inPortLocations.set(port.name, nodePort.position);
 
@@ -1307,6 +1439,52 @@ export class GraphNode extends PIXI.Container {
     }
 
     return portY;
+  }
+
+  /**
+   * Note that these should be drawn after the ports so that the port locations
+   * are known.
+   */
+  #drawReferences() {
+    this.#referenceContainer.visible = this.#expansionState !== "collapsed";
+    this.#referenceContainer.inPortLocations = this.#inPortLocations;
+    this.#referenceContainer.references = this.#references;
+    this.#referenceContainer.selectedReferences = this.#selectedReferences;
+
+    this.addChildAt(this.#referenceContainer, 0);
+  }
+
+  referenceRects(): Array<{ id: string; rect: PIXI.Rectangle }> {
+    return this.#referenceContainer.getReferenceRects();
+  }
+
+  intersectingBoardPort(
+    point: PIXI.PointData
+  ): { nodeId: NodeIdentifier; portId: PortIdentifier } | false {
+    if (!this.#inPortsData) {
+      return false;
+    }
+
+    for (const port of this.#inPortsData.values()) {
+      if (!port) {
+        continue;
+      }
+
+      if (
+        port.label.getBounds().containsPoint(point.x, point.y) ||
+        port.nodePort.getBounds().containsPoint(point.x, point.y)
+      ) {
+        if (
+          isBoardBehavior(port.port.schema) ||
+          isBoardArrayBehavior(port.port.schema)
+        ) {
+          return { nodeId: this.label, portId: port.port.name };
+        }
+
+        return false;
+      }
+    }
+    return false;
   }
 
   inPortLocation(name: string): PIXI.ObservablePoint | null {

@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { SignalArray } from "signal-utils/array";
+import type { ArtifactStore } from "../artifacts/artifact-store.js";
 import type { SecretsProvider } from "../secrets/secrets-provider.js";
 import type { ToolProvider } from "../tools/tool-provider.js";
 import type { BBRTTool } from "../tools/tool.js";
@@ -13,39 +13,34 @@ import { BreadboardTool } from "./breadboard-tool.js";
 
 export class BreadboardToolProvider implements ToolProvider {
   readonly #server: BreadboardServer;
-  readonly #tools = new SignalArray<BBRTTool>();
   readonly #secrets: SecretsProvider;
-  #stale = true;
+  readonly #artifacts: ArtifactStore;
 
-  constructor(server: BreadboardServer, secrets: SecretsProvider) {
+  constructor(
+    server: BreadboardServer,
+    secrets: SecretsProvider,
+    artifacts: ArtifactStore
+  ) {
     this.#server = server;
     this.#secrets = secrets;
+    this.#artifacts = artifacts;
   }
 
   get name() {
     return new URL(this.#server.url).host;
   }
 
-  tools(): SignalArray<BBRTTool> {
-    if (this.#stale) {
-      this.#stale = false;
-      void this.#update();
-    }
-    return this.#tools;
-  }
-
-  async #update(): Promise<void> {
+  async tools(): Promise<BBRTTool[]> {
     const boards = await this.#server.boards();
     if (!boards.ok) {
       console.error(
         `Failed to fetch boards from ${this.#server.url}: ${boards.error}`
       );
-      return;
+      return [];
     }
-    const tools = boards.value.map(
-      (board) => new BreadboardTool(board, this.#server, this.#secrets)
+    return boards.value.map(
+      (board) =>
+        new BreadboardTool(board, this.#server, this.#secrets, this.#artifacts)
     );
-    this.#tools.length = 0;
-    this.#tools.push(...tools);
   }
 }

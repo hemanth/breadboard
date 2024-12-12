@@ -11,6 +11,7 @@ import { makeToolSafeName } from "../breadboard/make-tool-safe-name.js";
 import "../components/content.js";
 import type { GeminiFunctionDeclaration } from "../drivers/gemini-types.js";
 import type { EmptyObject } from "../util/empty-object.js";
+import { coercePresentableError } from "../util/presentable-error.js";
 import type { Result } from "../util/result.js";
 import type {
   BBRTTool,
@@ -69,7 +70,7 @@ export class BoardLister implements BBRTTool<Inputs, Outputs> {
 class ListToolsInvocation implements ToolInvocation<Outputs> {
   #servers: BreadboardServer[];
   readonly state = new Signal.State<ToolInvocationState<Outputs>>({
-    status: "running",
+    status: "unstarted",
   });
 
   render() {
@@ -82,10 +83,14 @@ class ListToolsInvocation implements ToolInvocation<Outputs> {
 
   constructor(servers: BreadboardServer[]) {
     this.#servers = servers;
-    void this.#start();
   }
 
-  async #start(): Promise<void> {
+  async start(): Promise<void> {
+    if (this.state.get().status !== "unstarted") {
+      return;
+    }
+    this.state.set({ status: "running" });
+
     const toolResults = (
       await Promise.all(
         this.#servers.map((server) => this.#getToolsFromServer(server))
@@ -96,7 +101,7 @@ class ListToolsInvocation implements ToolInvocation<Outputs> {
       if (!tool.ok) {
         this.state.set({
           status: "error",
-          error: tool.error,
+          error: coercePresentableError(tool.error),
         });
         return;
       }
