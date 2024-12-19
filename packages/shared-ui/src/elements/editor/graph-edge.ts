@@ -107,6 +107,16 @@ export class GraphEdge extends PIXI.Container {
       this.#draw();
       this.#isDirty = false;
     };
+
+    this.on("destroyed", () => {
+      // Prevent future renderings.
+      this.#isDirty = false;
+
+      for (const child of this.children) {
+        child.destroy({ children: true });
+      }
+    });
+
     this.#edgeGraphic.addEventListener("pointerover", () => {
       if (this.readOnly) {
         return;
@@ -773,10 +783,10 @@ export class GraphEdge extends PIXI.Container {
           outLocation.x - this.#edgePaddingRight,
           outLocation.y - this.#hitAreaSpacing,
 
-          outLocation.x + this.#hitAreaSpacing,
+          outLocation.x + 1.5 * this.#edgePaddingRight + this.#hitAreaSpacing,
           outLocation.y - this.#hitAreaSpacing,
 
-          outLocation.x + this.#hitAreaSpacing,
+          outLocation.x + 1.5 * this.#edgePaddingRight + this.#hitAreaSpacing,
           midA.y + this.#hitAreaSpacing,
 
           inLocation.x - this.#loopBackPadding + this.#hitAreaSpacing,
@@ -797,10 +807,10 @@ export class GraphEdge extends PIXI.Container {
           inLocation.x - this.#loopBackPadding - this.#hitAreaSpacing,
           midB.y - this.#hitAreaSpacing,
 
-          outLocation.x - this.#hitAreaSpacing,
+          outLocation.x + 1.5 * this.#edgePaddingRight - this.#hitAreaSpacing,
           midB.y - this.#hitAreaSpacing,
 
-          outLocation.x - this.#hitAreaSpacing,
+          outLocation.x + 1.5 * this.#edgePaddingRight - this.#hitAreaSpacing,
           outLocation.y + this.#hitAreaSpacing,
 
           outLocation.x - this.#edgePaddingRight,

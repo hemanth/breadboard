@@ -646,9 +646,9 @@ export class ModuleEditor extends LitElement {
       title: selectedGraph.raw().title ?? "Untitled Board",
       subGraphId,
       minimized: false,
-      showNodeTypeDescriptions: false,
       showNodePreviewValues: false,
       collapseNodesByDefault: false,
+      showGraphOutline: false,
       ports: ports,
       typeMetadata,
       edges: selectedGraph.edges(),
@@ -656,6 +656,7 @@ export class ModuleEditor extends LitElement {
       modules: selectedGraph.modules(),
       metadata: selectedGraph.metadata() || {},
       selectionState: null,
+      references: null,
     };
   }
 
@@ -678,11 +679,14 @@ export class ModuleEditor extends LitElement {
       };
     }
 
+    const module = this.modules[this.moduleId];
+
     // Create a stable URL.
     const mainGraphURL = this.graph!.raw().url!;
     const url = `module-preview:${mainGraphURL}?module=${this.moduleId}`;
     const graph: GraphDescriptor = {
       url,
+      title: module?.metadata().title,
       nodes: [
         isMainModule
           ? {
@@ -699,7 +703,7 @@ export class ModuleEditor extends LitElement {
               id: this.moduleId,
               type: "runModule",
               metadata: {
-                title: `Demo Component`,
+                title: module?.metadata().title,
                 visual: {
                   collapsed: "expanded",
                 },
@@ -895,7 +899,7 @@ export class ModuleEditor extends LitElement {
             <div id="module-graph">
               <bb-graph-renderer
                 .padding=${28}
-                .topGraphUrl=${this.graph?.raw().url ?? "no-url"}
+                .topGraphUrl=${globalThis.crypto.randomUUID()}
                 .topGraphResult=${this.topGraphResult}
                 .assetPrefix=${this.assetPrefix}
                 .configs=${this.#createModuleGraphConfig(isMainModule)}

@@ -8,18 +8,16 @@ import { SignalWatcher } from "@lit-labs/signals";
 import { LitElement, css, html, nothing } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { classMap } from "lit/directives/class-map.js";
-import type { SignalArray } from "signal-utils/array";
 import type { SignalSet } from "signal-utils/set";
-import type { ToolProvider } from "../tools/tool-provider.js";
 import type { BBRTTool } from "../tools/tool.js";
 
 @customElement("bbrt-tool-palette")
 export class BBRTToolPalette extends SignalWatcher(LitElement) {
   @property({ attribute: false })
-  toolProviders?: SignalArray<ToolProvider>;
+  availableTools?: SignalSet<BBRTTool>;
 
   @property({ attribute: false })
-  activeTools?: SignalSet<BBRTTool>;
+  activeToolIds?: SignalSet<string>;
 
   static override styles = css`
     :host {
@@ -46,10 +44,6 @@ export class BBRTToolPalette extends SignalWatcher(LitElement) {
     :first-child {
       margin-top: 0;
     }
-    h3 {
-      font-weight: normal;
-      color: #666;
-    }
     img {
       height: 16px;
       max-width: 16px;
@@ -60,25 +54,22 @@ export class BBRTToolPalette extends SignalWatcher(LitElement) {
   `;
 
   override render() {
-    if (this.toolProviders === undefined) {
+    if (this.availableTools === undefined) {
       return nothing;
     }
     return html`
       <ul>
-        ${this.toolProviders.map(this.#renderProviders)}
+        ${[...this.availableTools].map(this.#renderTool)}
       </ul>
     `;
   }
 
-  #renderProviders = (provider: ToolProvider) => html`
-    <h3>${provider.name}</h3>
-    <ul>
-      ${provider.tools().map(this.#renderTool)}
-    </ul>
-  `;
-
   #renderTool = (tool: BBRTTool) => html`
-    <li class=${classMap({ active: this.activeTools?.has(tool) ?? false })}>
+    <li
+      class=${classMap({
+        active: this.activeToolIds?.has(tool.metadata.id) ?? false,
+      })}
+    >
       <a href="#" @click=${(event: MouseEvent) => this.#clickTool(event, tool)}>
         ${tool.metadata.icon
           ? html`<img src=${tool.metadata.icon} alt="" />`
@@ -91,13 +82,14 @@ export class BBRTToolPalette extends SignalWatcher(LitElement) {
   #clickTool(event: MouseEvent, tool: BBRTTool) {
     event.preventDefault();
     event.stopImmediatePropagation();
-    if (this.activeTools === undefined) {
+    if (this.activeToolIds === undefined) {
       return;
     }
-    if (this.activeTools.has(tool)) {
-      this.activeTools.delete(tool);
+    const id = tool.metadata.id;
+    if (this.activeToolIds.has(id)) {
+      this.activeToolIds.delete(id);
     } else {
-      this.activeTools.add(tool);
+      this.activeToolIds.add(id);
     }
   }
 }

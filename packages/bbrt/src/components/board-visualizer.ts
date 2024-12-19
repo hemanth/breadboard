@@ -31,7 +31,6 @@ export class BBRTBoardVisualizer extends LitElement {
     }
     bb-graph-renderer {
       width: 100%;
-      height: 100%;
     }
   `;
 
@@ -72,8 +71,8 @@ export class BBRTBoardVisualizer extends LitElement {
       title: graph.title ?? "Untitled",
       subGraphId: null,
       minimized: false,
-      showNodeTypeDescriptions: true,
       showNodePreviewValues: true,
+      showGraphOutline: false,
       collapseNodesByDefault: false,
       ports: ports,
       typeMetadata,
@@ -82,6 +81,7 @@ export class BBRTBoardVisualizer extends LitElement {
       modules: inspectable.modules(),
       metadata: inspectable.metadata() ?? {},
       selectionState: null,
+      references: null,
     };
   }
 }

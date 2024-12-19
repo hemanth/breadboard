@@ -11,6 +11,7 @@ import {
   InspectableNode,
   InspectableNodePorts,
   NodeHandlerMetadata,
+  PortIdentifier,
 } from "@google-labs/breadboard";
 import { GraphSelectionState } from "../../types/types";
 
@@ -47,7 +48,13 @@ export enum GRAPH_OPERATIONS {
   GRAPH_SHOW_TOOLTIP = "graphshowtooltip",
   GRAPH_HIDE_TOOLTIP = "graphhidetooltip",
   GRAPH_TOGGLE_MINIMIZED = "graphtoggleminimized",
+  MODULE_SELECTED = "moduleselected",
   SUBGRAPH_SELECTED = "subgraphselected",
+  SUBGRAPH_CONNECTION_START = "subgraphconnectionstart",
+  GRAPH_REFERENCE_TOGGLE_SELECTED = "graphreferenceselected",
+  GRAPH_REFERENCE_GOTO = "graphreferencegoto",
+  GRAPH_REFERENCE_LOAD = "graphreferenceload",
+  WARN_USER = "warnuser",
 }
 
 export enum GraphNodePortType {
@@ -77,10 +84,11 @@ export interface GraphOpts {
   title: string;
   subGraphId: string | null;
   showNodePreviewValues: boolean;
-  showNodeTypeDescriptions: boolean;
+  showGraphOutline: boolean;
   collapseNodesByDefault: boolean;
   ports: Map<string, InspectableNodePorts> | null;
   typeMetadata: Map<string, NodeHandlerMetadata> | null;
+  references: GraphReferences | null;
   edges: InspectableEdge[];
   nodes: InspectableNode[];
   modules: InspectableModules;
@@ -94,3 +102,15 @@ export type SideEdge = {
   portName: string;
   graphId: string;
 };
+
+export type GraphReferences = Map<NodeIdentifier, GraphNodeReferences>;
+
+export type GraphNodeReferences = Map<PortIdentifier, GraphNodeReferenceOpts>;
+
+export type GraphNodeReferenceOpts = Array<{
+  title: string;
+  color: number;
+  reference: string;
+}>;
+
+export type MoveToSelection = "immediate" | "animated" | false;
