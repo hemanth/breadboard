@@ -13,6 +13,7 @@ import {
   MainGraphIdentifier,
   MutableGraphStore,
   NodeConfiguration,
+  PortIdentifier,
   RunStore,
 } from "@google-labs/breadboard";
 
@@ -37,7 +38,7 @@ export type TabURL = string;
 export type TabName = string;
 export interface Tab {
   id: TabId;
-  kits: Kit[];
+  boardServerKits: Kit[];
   name: TabName;
   mainGraphId: MainGraphIdentifier;
   graph: GraphDescriptor;
@@ -78,10 +79,14 @@ export type EnhanceSideboard = {
   enhance(config: NodeConfiguration): Promise<Result<NodeConfiguration>>;
 };
 
+export type ReferenceIdentifier =
+  `${NodeIdentifier}|${PortIdentifier}|${number}`;
+
 export interface GraphSelectionState {
   nodes: Set<NodeIdentifier>;
   comments: Set<string>;
   edges: Set<string>;
+  references: Set<ReferenceIdentifier>;
 }
 
 export interface GraphEntityVisualState {
@@ -116,3 +121,4 @@ export interface WorkspaceSelectionStateWithChangeId {
 
 export type TabSelectionState = Map<TabId, WorkspaceSelectionState>;
 export type EditChangeId = ReturnType<typeof crypto.randomUUID>;
+export type MoveToSelection = "immediate" | "animated" | false;

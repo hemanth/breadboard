@@ -4,197 +4,124 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { GraphDescriptor } from "@google-labs/breadboard";
 import { SignalWatcher } from "@lit-labs/signals";
-import { LitElement, css, html, nothing } from "lit";
-import { customElement, property, state } from "lit/decorators.js";
-import { classMap } from "lit/directives/class-map.js";
-import { Signal } from "signal-polyfill";
-import { SignalArray } from "signal-utils/array";
-import { AsyncComputed } from "signal-utils/async-computed";
-import { SignalSet } from "signal-utils/set";
+import { LitElement, css, html } from "lit";
+import { customElement, property } from "lit/decorators.js";
+import { BBRTAppState } from "../app-state.js";
 import { BreadboardToolProvider } from "../breadboard/breadboard-tool-provider.js";
-import { BreadboardTool } from "../breadboard/breadboard-tool.js";
 import { readBoardServersFromIndexedDB } from "../breadboard/indexed-db-servers.js";
 import type { Config } from "../config.js";
-import type { BBRTDriver } from "../drivers/driver-interface.js";
-import { GeminiDriver } from "../drivers/gemini.js";
-import { OpenAiDriver } from "../drivers/openai.js";
-import { BBRTConversation } from "../llm/conversation.js";
-import { IndexedDBSettingsSecrets } from "../secrets/indexed-db-secrets.js";
 import { ActivateTool } from "../tools/activate-tool.js";
+import { AddNode } from "../tools/add-node.js";
+import { CreateBoard } from "../tools/create-board.js";
+import { DisplayArtifact } from "../tools/display-artifact.js";
 import { BoardLister } from "../tools/list-tools.js";
-import { ToolProvider } from "../tools/tool-provider.js";
 import type { BBRTTool } from "../tools/tool.js";
-import "./board-visualizer.js";
+import { connectedEffect } from "../util/connected-effect.js";
+import "./artifact-display.js";
 import "./chat.js";
 import "./driver-selector.js";
 import "./prompt.js";
 import "./tool-palette.js";
+
+const APP_STATE_SESSION_STORAGE_KEY = "bbrt-app-state-v1";
 
 @customElement("bbrt-main")
 export class BBRTMain extends SignalWatcher(LitElement) {
   @property({ type: Object })
   config?: Config;
 
-  readonly #secrets = new IndexedDBSettingsSecrets();
-  readonly #drivers = [
-    new GeminiDriver(() => this.#secrets.getSecret("GEMINI_API_KEY")),
-    new OpenAiDriver(() => this.#secrets.getSecret("OPENAI_API_KEY")),
-  ];
-  readonly #activeDriver = new Signal.State<BBRTDriver>(this.#drivers[0]!);
-  readonly #toolProviders = new SignalArray<ToolProvider>();
-  readonly #activeTools = new SignalSet<BBRTTool>();
-  readonly #conversation = new BBRTConversation(
-    this.#activeDriver,
-    this.#activeTools
-  );
-  readonly #displayedBoard = new AsyncComputed<GraphDescriptor | undefined>(
-    async () => {
-      // TODO(aomarks) This is just a temporary way to get some kind of relevant
-      // graph to render, to prove that rendering is working OK. Eventually this
-      // would render a board being built from the conversation.
-      let boardTool: BreadboardTool | undefined;
-      for (const tool of this.#activeTools) {
-        if (tool instanceof BreadboardTool) {
-          boardTool = tool;
-        }
-      }
-      if (boardTool === undefined) {
-        return undefined;
-      }
-      const bgl = await boardTool.bgl();
-      if (!bgl.ok) {
-        return undefined;
-      }
-      return bgl.value;
-    }
-  );
-
-  @state()
-  private _sidePanelOpen = true;
+  readonly #state = new BBRTAppState();
 
   static override styles = css`
     :host {
-      --sidebar-width: 350px;
-    }
-    #container {
-      width: 100vw;
-      height: 100vh;
       display: grid;
-      grid-template-columns: 2fr 0;
-      grid-template-rows: 1fr auto;
+      grid-template-areas:
+        "sidebar chatlog artifacts"
+        "sidebar chatlog artifacts"
+        "sidebar inputs  artifacts";
+      grid-template-columns: 300px 1fr 1fr;
+      grid-template-rows: 1fr min-content;
     }
-    #container.sidePanelOpen {
-      grid-template-columns: 2fr var(--sidebar-width);
+    bbrt-tool-palette {
+      grid-area: sidebar;
+      overflow-y: auto;
+      border-right: 1px solid #ccc;
     }
     bbrt-chat {
-      grid-column: 1;
-      grid-row: 1 / 2;
-    }
-    #bottom {
-      padding: 24px;
-      border-top: 1px solid #ccc;
-      grid-column: 1;
-      grid-row: 2;
+      grid-area: chatlog;
+      overflow-y: auto;
     }
     #inputs {
+      grid-area: inputs;
       display: flex;
+      padding: 24px;
+      border-top: 1px solid #ccc;
     }
     bbrt-prompt {
       flex-grow: 1;
     }
-    #sidebar {
-      grid-column: 2;
-      grid-row: 1 / 3;
+    bbrt-artifact-display {
+      grid-area: artifacts;
       border-left: 1px solid #ccc;
-      display: grid;
-      grid-template-rows: 1fr var(--sidebar-width);
-    }
-    #expandSidebarButton {
-      position: fixed;
-      top: 12px;
-      right: 16px;
-      height: 48px;
-      width: 48px;
-      background: none;
-      border: none;
-      cursor: pointer;
-    }
-    bbrt-tool-palette {
-      overflow-y: scroll;
-    }
-    bbrt-board-visualizer {
-      border-top: 1px solid #ccc;
-      width: var(--sidebar-width);
+      overflow: hidden;
     }
   `;
 
-  connectedCallback(): void {
-    super.connectedCallback();
-    void this.#discoverToolProviders();
+  constructor() {
+    super();
+    void this.#firstBoot();
+  }
+
+  async #firstBoot() {
+    await this.#loadAllTools();
+    this.#restoreState();
+    connectedEffect(this, () => this.#persistState());
+  }
+
+  #restoreState() {
+    const serialized = sessionStorage.getItem(APP_STATE_SESSION_STORAGE_KEY);
+    if (serialized !== null) {
+      const parsed = JSON.parse(serialized);
+      console.log("Restoring state", parsed);
+      this.#state.restore(parsed);
+    }
+  }
+
+  #persistState() {
+    const state = this.#state.serialize();
+    const serialized = JSON.stringify(state, null, 2);
+    try {
+      sessionStorage.setItem(APP_STATE_SESSION_STORAGE_KEY, serialized);
+    } catch (error) {
+      console.error("Failed to persist state", error);
+    }
   }
 
   override render() {
     return html`
-      <div
-        id="container"
-        class=${classMap({ sidePanelOpen: this._sidePanelOpen })}
-      >
-        <bbrt-chat .conversation=${this.#conversation}></bbrt-chat>
-        <div id="bottom">
-          <div id="inputs">
-            <bbrt-driver-selector
-              .available=${this.#drivers}
-              .active=${this.#activeDriver}
-            ></bbrt-driver-selector>
-            <bbrt-prompt .conversation=${this.#conversation}></bbrt-prompt>
-          </div>
-        </div>
-        <button id="expandSidebarButton" @click=${this.#clickExpandSidebar}>
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            height="24px"
-            viewBox="0 -960 960 960"
-            width="24px"
-            fill="#5f6368"
-          >
-            <path
-              d="M120-240v-80h720v80H120Zm0-200v-80h720v80H120Zm0-200v-80h720v80H120Z"
-            />
-          </svg>
-        </button>
-        <div id="sidebar">${this.#renderSidebarContents()}</div>
+      <div id="inputs">
+        <bbrt-driver-selector
+          .available=${this.#state.drivers}
+          .active=${this.#state.activeDriver}
+        ></bbrt-driver-selector>
+        <bbrt-prompt .conversation=${this.#state.conversation}></bbrt-prompt>
       </div>
+
+      <bbrt-chat .conversation=${this.#state.conversation}></bbrt-chat>
+
+      <bbrt-tool-palette
+        .availableTools=${this.#state.availableTools}
+        .activeToolIds=${this.#state.activeToolIds}
+      ></bbrt-tool-palette>
+
+      <bbrt-artifact-display
+        .artifact=${this.#state.activeArtifact}
+      ></bbrt-artifact-display>
     `;
   }
 
-  #clickExpandSidebar() {
-    this._sidePanelOpen = !this._sidePanelOpen;
-  }
-
-  #renderSidebarContents() {
-    if (!this._sidePanelOpen) {
-      return nothing;
-    }
-
-    return [
-      html`
-        <bbrt-tool-palette
-          .toolProviders=${this.#toolProviders}
-          .activeTools=${this.#activeTools}
-        ></bbrt-tool-palette>
-      `,
-
-      html`
-        <bbrt-board-visualizer
-          .graph=${this.#displayedBoard.get()}
-        ></bbrt-board-visualizer>
-      `,
-    ];
-  }
-
-  async #discoverToolProviders() {
+  async #loadAllTools() {
     const servers = await readBoardServersFromIndexedDB();
     if (!servers.ok) {
       console.error(
@@ -203,19 +130,46 @@ export class BBRTMain extends SignalWatcher(LitElement) {
       );
       return;
     }
-    this.#toolProviders.length = 0;
-    this.#toolProviders.push(
-      ...servers.value.map(
-        (server) => new BreadboardToolProvider(server, this.#secrets)
-      )
-    );
-    this.#activeTools.clear();
+
+    const boardLister = new BoardLister(servers.value);
     // TODO(aomarks) Casts should not be needed. Something to do with the
     // default parameter being unknown instead of any.
-    this.#activeTools.add(new BoardLister(servers.value) as BBRTTool);
-    this.#activeTools.add(
-      new ActivateTool(this.#toolProviders, this.#activeTools) as BBRTTool
+    this.#state.availableTools.add(boardLister as BBRTTool);
+    this.#state.activeToolIds.add(boardLister.metadata.id);
+
+    const toolActivator = new ActivateTool(
+      this.#state.availableTools,
+      this.#state.activeToolIds
     );
+    this.#state.availableTools.add(toolActivator as BBRTTool);
+    this.#state.activeToolIds.add(toolActivator.metadata.id);
+
+    const boardCreator = new CreateBoard(this.#state.artifacts);
+    this.#state.availableTools.add(boardCreator as BBRTTool);
+    this.#state.activeToolIds.add(boardCreator.metadata.id);
+
+    const nodeAdder = new AddNode(this.#state.artifacts);
+    this.#state.availableTools.add(nodeAdder as BBRTTool);
+    this.#state.activeToolIds.add(nodeAdder.metadata.id);
+
+    const artifactDisplayer = new DisplayArtifact((artifactId) => {
+      this.#state.activeArtifactId.set(artifactId);
+      return { ok: true, value: undefined };
+    });
+    this.#state.availableTools.add(artifactDisplayer as BBRTTool);
+    this.#state.activeToolIds.add(artifactDisplayer.metadata.id);
+
+    for (const server of servers.value) {
+      const provider = new BreadboardToolProvider(
+        server,
+        this.#state.secrets,
+        this.#state.artifacts
+      );
+      this.#state.toolProviders.push(provider);
+      for (const tool of await provider.tools()) {
+        this.#state.availableTools.add(tool);
+      }
+    }
   }
 }
 

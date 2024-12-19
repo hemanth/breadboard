@@ -5,7 +5,7 @@
  */
 
 import type { BBRTChunk } from "../llm/chunk.js";
-import type { BBRTTurn } from "../llm/conversation.js";
+import type { BBRTTurn } from "../llm/conversation-types.js";
 import type { BBRTTool } from "../tools/tool.js";
 import type { Result } from "../util/result.js";
 
@@ -19,6 +19,7 @@ export interface BBRTDriver {
 
   executeTurn(
     turns: BBRTTurn[],
-    tools: BBRTTool[]
+    tools: BBRTTool[],
+    systemInstruction: string
   ): Promise<Result<AsyncIterableIterator<BBRTChunk>>>;
 }

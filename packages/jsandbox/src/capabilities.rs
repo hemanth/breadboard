@@ -15,6 +15,8 @@ impl ModuleDef for CapabilitiesModule {
         decl.declare("fetch")?;
         decl.declare("secrets")?;
         decl.declare("invoke")?;
+        decl.declare("output")?;
+        decl.declare("describe")?;
         Ok(())
     }
 
@@ -31,6 +33,14 @@ impl ModuleDef for CapabilitiesModule {
         exports.export(
             "invoke",
             Function::new(ctx.clone(), Async(invoke_value))?.with_name("invoke")?,
+        )?;
+        exports.export(
+            "output",
+            Function::new(ctx.clone(), Async(output_value))?.with_name("output")?,
+        )?;
+        exports.export(
+            "describe",
+            Function::new(ctx.clone(), Async(describe_value))?.with_name("describe")?,
         )?;
         Ok(())
     }
@@ -77,9 +87,25 @@ async fn invoke_value<'js>(
     call_capability(invocation_id, inputs, invoke).await
 }
 
+async fn output_value<'js>(
+    invocation_id: String,
+    inputs: Value<'js>,
+) -> rquickjs::Result<Value<'js>> {
+    call_capability(invocation_id, inputs, output).await
+}
+
+async fn describe_value<'js>(
+    invocation_id: String,
+    inputs: Value<'js>,
+) -> rquickjs::Result<Value<'js>> {
+    call_capability(invocation_id, inputs, describe).await
+}
+
 #[wasm_bindgen(raw_module = "./capabilities.js")]
 extern "C" {
     async fn fetch(invocation_id: String, inputs: String) -> JsValue;
     async fn secrets(invocation_id: String, inputs: String) -> JsValue;
     async fn invoke(invocation_id: String, inputs: String) -> JsValue;
+    async fn output(invocation_id: String, inputs: String) -> JsValue;
+    async fn describe(invocation_id: String, inputs: String) -> JsValue;
 }

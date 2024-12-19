@@ -8,7 +8,7 @@ import { OutputValues, UUID } from "@breadboard-ai/types";
 import { Telemetry } from "./telemetry.js";
 import { Capability, CapabilitySpec } from "./types.js";
 
-export { fetch, secrets, invoke, Capabilities };
+export { fetch, secrets, invoke, output, describe, Capabilities };
 
 type Installed = {
   capabilities: Map<string, Capability>;
@@ -31,14 +31,24 @@ class Capabilities {
       );
     }
     const parsedInputs = JSON.parse(inputs);
+    const isOutput = name === "output";
     const metadata = parsedInputs.$metadata;
-    if (metadata) {
+    if (metadata && !isOutput) {
       delete parsedInputs.$metadata;
     }
-    await installed.telemetry?.startCapability(name, parsedInputs, metadata);
-    const outputs = await capability(parsedInputs);
+    const path =
+      (await installed.telemetry?.startCapability(
+        name,
+        parsedInputs,
+        metadata
+      )) || 0;
+    const outputs = await capability(
+      parsedInputs,
+      installed.telemetry?.invocationPath(path) || []
+    );
     await installed.telemetry?.endCapability(
       name,
+      path,
       parsedInputs,
       outputs as OutputValues
     );
@@ -80,4 +90,12 @@ async function secrets(invocationId: UUID, inputs: string) {
 
 async function invoke(invocationId: UUID, inputs: string) {
   return Capabilities.instance().invoke(invocationId, "invoke", inputs);
+}
+
+async function output(invocationId: UUID, inputs: string) {
+  return Capabilities.instance().invoke(invocationId, "output", inputs);
+}
+
+async function describe(invocationId: UUID, inputs: string) {
+  return Capabilities.instance().invoke(invocationId, "describe", inputs);
 }

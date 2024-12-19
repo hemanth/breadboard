@@ -11,6 +11,7 @@ import {
   InspectableNodePorts,
   InspectablePort,
   NodeIdentifier,
+  UnresolvedPathBoardCapability,
 } from "@google-labs/breadboard";
 import { LitElement, html, css, nothing, HTMLTemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
@@ -26,14 +27,23 @@ import {
   SubGraphDeleteEvent,
   WorkspaceSelectionStateEvent,
   WorkspaceItemVisualUpdateEvent,
+  DragConnectorStartEvent,
+  ShowTooltipEvent,
+  HideTooltipEvent,
 } from "../../events/events";
 import { MAIN_BOARD_ID } from "../../constants/constants";
 import { createRef, Ref, ref } from "lit/directives/ref.js";
 import { styleMap } from "lit/directives/style-map.js";
 import { getSubItemColor } from "../../utils/subgraph-color";
-import { isConfigurableBehavior, isModuleBehavior } from "../../utils";
+import {
+  isBoardArrayBehavior,
+  isBoardBehavior,
+  isConfigurableBehavior,
+  isModuleBehavior,
+} from "../../utils";
 import { ModuleIdentifier } from "@breadboard-ai/types";
 import {
+  DragConnectorReceiver,
   OverflowAction,
   WorkspaceSelectionChangeId,
   WorkspaceSelectionStateWithChangeId,
@@ -67,7 +77,10 @@ interface OverflowMenu {
 }
 
 @customElement("bb-workspace-outline")
-export class WorkspaceOutline extends LitElement {
+export class WorkspaceOutline
+  extends LitElement
+  implements DragConnectorReceiver
+{
   @property()
   graph: InspectableGraph | null = null;
 
@@ -81,7 +94,10 @@ export class WorkspaceOutline extends LitElement {
   selectionState: WorkspaceSelectionStateWithChangeId | null = null;
 
   @property()
-  graphTopologyUpdateId: number = 0;
+  graphStoreUpdateId: number = 0;
+
+  @property({ reflect: true })
+  showBoardReferenceMarkers = false;
 
   @state()
   filter: string | null = null;
@@ -235,18 +251,14 @@ export class WorkspaceOutline extends LitElement {
       align-items: center;
     }
 
-    details.declarative > summary {
-      padding-right: var(--bb-grid-size-13);
+    details > summary {
+      padding-right: var(--bb-grid-size-14);
       cursor: pointer;
       background: var(--bb-icon-unfold-more) calc(100% - 4px) center / 20px 20px
         no-repeat;
     }
 
-    details.imperative > summary {
-      padding-right: var(--bb-grid-size-13);
-    }
-
-    details.declarative[open] > summary {
+    details[open] > summary {
       background: var(--bb-icon-unfold-less) calc(100% - 4px) center / 20px 20px
         no-repeat;
     }
@@ -327,6 +339,7 @@ export class WorkspaceOutline extends LitElement {
       border-radius: 50%;
       margin-right: var(--bb-grid-size);
       display: inline-block;
+      pointer-events: none;
     }
 
     li.port > .title::before {
@@ -372,6 +385,19 @@ export class WorkspaceOutline extends LitElement {
       border: 1px solid var(--bb-ui-600);
     }
 
+    :host([showBoardReferenceMarkers="true"]) li.port.board > .title::after {
+      content: "";
+      width: var(--bb-grid-size-2);
+      height: calc(var(--bb-grid-size-2) - 1px);
+      left: 22px;
+      top: 3px;
+      border: 3px solid transparent;
+      border-radius: 50%;
+      box-shadow: 0 0 0 3px var(--bb-joiner-500);
+      position: absolute;
+      pointer-events: none;
+    }
+
     li.port.missing > .title::before {
       background: var(--bb-warning-300);
       border: 1px solid var(--bb-warning-700);
@@ -383,6 +409,7 @@ export class WorkspaceOutline extends LitElement {
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+      position: relative;
     }
 
     li.node > .title::before {
@@ -394,6 +421,7 @@ export class WorkspaceOutline extends LitElement {
       display: inline-block;
       margin-right: var(--bb-grid-size);
       flex: 0 0 auto;
+      pointer-events: none;
     }
 
     li.node.input > .title::before {
@@ -539,6 +567,10 @@ export class WorkspaceOutline extends LitElement {
     details:not(.main) summary:hover > .title,
     details:not(.main) summary > .title:hover {
       width: calc(100% - 36px);
+    }
+
+    details:not(.main) summary:hover > .title:not(.selected),
+    details:not(.main) summary > .title:not(.selected):hover {
       background: var(--bb-ui-50);
     }
 
@@ -601,13 +633,34 @@ export class WorkspaceOutline extends LitElement {
     }
 
     .color {
-      display: block;
+      display: flex;
+      margin-left: var(--bb-grid-size);
+      width: 20px;
+      height: 20px;
+      flex: 0 0 auto;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+    }
+
+    .color::before {
+      content: "";
       background: var(--subgraph-label-color, red);
       border-radius: 50%;
-      margin-left: var(--bb-grid-size);
       width: 10px;
       height: 10px;
-      flex: 0 0 auto;
+    }
+
+    .color.reference {
+      background: var(--subgraph-label-color, red)
+        var(--bb-icon-drag-click-inverted) center center / 16px 16px no-repeat;
+      width: 20px;
+      height: 20px;
+      cursor: crosshair;
+    }
+
+    .color.reference::before {
+      display: none;
     }
 
     .more {
@@ -626,8 +679,7 @@ export class WorkspaceOutline extends LitElement {
     }
 
     summary:hover .more,
-    .more:hover,
-    .more:focus {
+    .more:hover {
       display: block;
     }
 
@@ -657,6 +709,42 @@ export class WorkspaceOutline extends LitElement {
 
   #createSubItemId(id: string) {
     return `sg-${id}`;
+  }
+
+  isOnDragConnectorTarget(x: number, y: number): string | null {
+    if (!this.shadowRoot) {
+      return null;
+    }
+
+    const el = this.shadowRoot.elementFromPoint(x, y);
+    if (!(el instanceof HTMLElement)) {
+      return null;
+    }
+
+    let target: HTMLElement | null = el;
+    do {
+      if (
+        target.dataset.dragConnectorTargetGraph &&
+        target.dataset.dragConnectorTargetNode &&
+        target.dataset.dragConnectorTargetPort
+      ) {
+        return `${target.dataset.dragConnectorTargetGraph}|${target.dataset.dragConnectorTargetNode}|${target.dataset.dragConnectorTargetPort}`;
+      }
+
+      target = target.parentElement;
+    } while (target);
+
+    return null;
+  }
+
+  highlight(_x: number, _y: number): void {
+    // TODO.
+    return;
+  }
+
+  removeHighlight(_x: number, _y: number): void {
+    // TODO.
+    return;
   }
 
   #getGraphDetails(graph: InspectableGraph) {
@@ -780,6 +868,34 @@ export class WorkspaceOutline extends LitElement {
     );
   }
 
+  #toBoardName(
+    id: GraphIdentifier | ModuleIdentifier | UnresolvedPathBoardCapability
+  ) {
+    if (typeof id === "object") {
+      id = id.path;
+    }
+
+    if (id.startsWith("#module:")) {
+      const modules = this.graph?.modules();
+      if (typeof id === "string") {
+        id = id.slice("#module:".length);
+      }
+
+      if (modules && typeof id === "string" && modules[id]) {
+        return modules[id].metadata().title ?? id;
+      }
+    } else {
+      const subGraphs = this.graph?.graphs();
+      if (typeof id === "string") {
+        id = id.slice(1);
+      }
+
+      if (subGraphs && typeof id === "string" && subGraphs[id]) {
+        return subGraphs[id].raw().title ?? id;
+      }
+    }
+  }
+
   #renderPreview(port: InspectablePort) {
     let preview = "";
     if (isModuleBehavior(port.schema)) {
@@ -789,6 +905,18 @@ export class WorkspaceOutline extends LitElement {
       }
 
       return "Unspecified Module";
+    }
+
+    if (isBoardBehavior(port.schema)) {
+      const value = port.value;
+      if (!value) return "Unset";
+      return this.#toBoardName(value as GraphIdentifier);
+    }
+
+    if (isBoardArrayBehavior(port.schema) && Array.isArray(port.value)) {
+      return port.value
+        .map((module) => this.#toBoardName(module as ModuleIdentifier))
+        .join(", ");
     }
 
     switch (typeof port.value) {
@@ -866,13 +994,26 @@ export class WorkspaceOutline extends LitElement {
                 return nothing;
               }
 
+              const dragConnectorTargetPort =
+                isBoardBehavior(port.schema) ||
+                isBoardArrayBehavior(port.schema)
+                  ? port.name
+                  : null;
+
               return html`<li
                 class=${classMap({
                   port: true,
                   [port.status]: true,
                   configured: port.configured,
                   "with-preview": true,
+                  board: dragConnectorTargetPort ?? false,
                 })}
+                data-drag-connector-target-graph=${subGraphId
+                  ? subGraphId
+                  : MAIN_BOARD_ID}
+                data-drag-connector-target-node=${node.descriptor.id ?? nothing}
+                data-drag-connector-target-port=${dragConnectorTargetPort ??
+                nothing}
               >
                 <span class="title">
                   ${isConfigurableBehavior(port.schema)
@@ -1063,6 +1204,8 @@ export class WorkspaceOutline extends LitElement {
         return nothing;
       }
 
+      const preventRefencing =
+        subItem.type === "imperative" && !subItem.runnable;
       return html`<details
         style=${styleMap({
           "--subgraph-border-color": getSubItemColor(id, "border"),
@@ -1181,7 +1324,61 @@ export class WorkspaceOutline extends LitElement {
                 >
                   More
                 </button>
-                <span class="color"></span>`
+                <span
+                  class=${classMap({
+                    color: true,
+                    ["reference"]: !preventRefencing,
+                  })}
+                  @click=${(evt: PointerEvent) => {
+                    if (preventRefencing) {
+                      return;
+                    }
+                    evt.preventDefault();
+                    evt.stopImmediatePropagation();
+                  }}
+                  @pointerover=${(evt: PointerEvent) => {
+                    if (preventRefencing) {
+                      return;
+                    }
+
+                    this.dispatchEvent(
+                      new ShowTooltipEvent(
+                        `Drag to a board port`,
+                        evt.clientX,
+                        evt.clientY
+                      )
+                    );
+                  }}
+                  @pointerout=${() => {
+                    if (preventRefencing) {
+                      return;
+                    }
+
+                    this.dispatchEvent(new HideTooltipEvent());
+                  }}
+                  @pointerdown=${(evt: PointerEvent) => {
+                    if (preventRefencing) {
+                      return;
+                    }
+
+                    evt.stopImmediatePropagation();
+
+                    const source =
+                      subItem.type === "declarative"
+                        ? `#${id}`
+                        : `#module:${id}`;
+
+                    this.dispatchEvent(
+                      new DragConnectorStartEvent(
+                        {
+                          x: evt.clientX,
+                          y: evt.clientY,
+                        },
+                        source
+                      )
+                    );
+                  }}
+                ></span>`
             : nothing}
         </summary>
         ${this.#renderWorkspaceItem(
@@ -1363,7 +1560,8 @@ export class WorkspaceOutline extends LitElement {
       new WorkspaceSelectionStateEvent(
         selectionChangeId,
         selectionState,
-        replaceExistingSelections
+        replaceExistingSelections,
+        "animated"
       )
     );
   }

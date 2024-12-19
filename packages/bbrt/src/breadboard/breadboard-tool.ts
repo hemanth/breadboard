@@ -9,11 +9,11 @@ import {
   asRuntimeKit,
   createDefaultDataStore,
   createLoader,
+  type DataStore,
   type GraphDescriptor,
   type InputValues,
   type Kit,
   type OutputValues,
-  type SerializedStoredData,
 } from "@google-labs/breadboard";
 import { createRunner, type RunConfig } from "@google-labs/breadboard/harness";
 import { kitFromGraphDescriptor } from "@google-labs/breadboard/kits";
@@ -23,6 +23,8 @@ import JSONKit from "@google-labs/json-kit";
 import TemplateKit from "@google-labs/template-kit";
 import { html, nothing } from "lit";
 import { Signal } from "signal-polyfill";
+import type { ArtifactHandle } from "../artifacts/artifact-interface.js";
+import type { ArtifactStore } from "../artifacts/artifact-store.js";
 import "../components/content.js";
 import type { SecretsProvider } from "../secrets/secrets-provider.js";
 import type {
@@ -32,7 +34,10 @@ import type {
   ToolInvocationState,
   ToolMetadata,
 } from "../tools/tool.js";
+import { coercePresentableError } from "../util/presentable-error.js";
 import type { Result } from "../util/result.js";
+import { resultify } from "../util/resultify.js";
+import { transposeResults } from "../util/transpose-results.js";
 import type {
   BreadboardBoardListing,
   BreadboardServer,
@@ -45,15 +50,18 @@ export class BreadboardTool implements BBRTTool<unknown, unknown> {
   readonly #listing: BreadboardBoardListing;
   readonly #server: BreadboardServer;
   readonly #secrets: SecretsProvider;
+  readonly #artifacts: ArtifactStore;
 
   constructor(
     listing: BreadboardBoardListing,
     server: BreadboardServer,
-    secrets: SecretsProvider
+    secrets: SecretsProvider,
+    artifacts: ArtifactStore
   ) {
     this.#listing = listing;
     this.#server = server;
     this.#secrets = secrets;
+    this.#artifacts = artifacts;
   }
 
   get metadata(): ToolMetadata {
@@ -91,7 +99,8 @@ export class BreadboardTool implements BBRTTool<unknown, unknown> {
       this.#listing,
       args,
       () => this.bgl(),
-      this.#secrets
+      this.#secrets,
+      this.#artifacts
     );
   }
 
@@ -106,28 +115,37 @@ export class BreadboardToolInvocation implements ToolInvocation<unknown> {
   readonly #args: unknown;
   readonly #secrets: SecretsProvider;
   readonly #getBgl: () => Promise<Result<GraphDescriptor>>;
+  readonly #artifacts: ArtifactStore;
 
   readonly state = new Signal.State<ToolInvocationState<unknown>>({
-    status: "running",
+    status: "unstarted",
   });
 
   constructor(
     listing: BreadboardBoardListing,
     args: unknown,
     getBgl: () => Promise<Result<GraphDescriptor>>,
-    secrets: SecretsProvider
+    secrets: SecretsProvider,
+    artifacts: ArtifactStore
   ) {
     this.#listing = listing;
     this.#args = args;
     this.#getBgl = getBgl;
     this.#secrets = secrets;
-    void this.#start();
+    this.#artifacts = artifacts;
   }
 
-  async #start(): Promise<void> {
+  async start(): Promise<void> {
+    if (this.state.get().status !== "unstarted") {
+      return;
+    }
+    this.state.set({ status: "running" });
     const bgl = await this.#getBgl();
     if (!bgl.ok) {
-      this.state.set({ status: "error", error: bgl.error });
+      this.state.set({
+        status: "error",
+        error: coercePresentableError(bgl.error),
+      });
       return;
     }
 
@@ -141,8 +159,8 @@ export class BreadboardToolInvocation implements ToolInvocation<unknown> {
     ];
 
     const store = createDefaultDataStore();
-    const storeGroupID = crypto.randomUUID();
-    store.createGroup(storeGroupID);
+    const storeGroupId = crypto.randomUUID();
+    store.createGroup(storeGroupId);
 
     const config: RunConfig = {
       // TODO(aomarks) What should this be, it matters for relative imports,
@@ -214,19 +232,73 @@ export class BreadboardToolInvocation implements ToolInvocation<unknown> {
     );
 
     if (!runResult.ok) {
-      this.state.set({ status: "error", error: runResult.error });
+      this.state.set({
+        status: "error",
+        error: coercePresentableError(runResult.error),
+      });
       return;
     }
-    // TODO(aomarks) Resultify
-    const artifacts: SerializedStoredData[] =
-      (await store.serializeGroup(storeGroupID)) ?? [];
+
+    const artifacts = await this.#extractAndStoreArtifacts(store, storeGroupId);
+    if (!artifacts.ok) {
+      this.state.set({
+        status: "error",
+        error: coercePresentableError(artifacts.error),
+      });
+      return;
+    }
     this.state.set({
       status: "success",
       value: {
         output: Object.assign({}, ...runResult.value),
-        artifacts,
+        artifacts: artifacts.value,
       },
     });
+  }
+
+  async #extractAndStoreArtifacts(
+    store: DataStore,
+    storeGroupId: string
+  ): Promise<Result<ArtifactHandle[]>> {
+    // TODO(aomarks) This is a bit inefficient, since serializeGroup does its
+    // own fetch and base64 encode into inline data. Should probably add a
+    // method to DataStore that just lists all the handles.
+    const storedData = await resultify(store.serializeGroup(storeGroupId));
+    if (!storedData.ok) {
+      return storedData;
+    }
+    if (!storedData.value || storedData.value.length === 0) {
+      return { ok: true, value: [] };
+    }
+    const blobs = await resultify(
+      Promise.all(
+        storedData.value.map(async (data) => (await fetch(data.handle)).blob())
+      )
+    );
+    if (!blobs.ok) {
+      return blobs;
+    }
+    return transposeResults(
+      await Promise.all(
+        blobs.value.map(async (blob) => {
+          const artifactId = crypto.randomUUID();
+          const entry = this.#artifacts.entry(artifactId);
+          using transaction = await entry.acquireExclusiveReadWriteLock();
+          const write = await transaction.write(blob);
+          if (!write.ok) {
+            return write;
+          }
+          return {
+            ok: true,
+            value: {
+              id: artifactId,
+              kind: "handle",
+              mimeType: blob.type,
+            },
+          };
+        })
+      )
+    );
   }
 
   render() {
@@ -236,6 +308,9 @@ export class BreadboardToolInvocation implements ToolInvocation<unknown> {
     `;
     const state = this.state.get();
     switch (state.status) {
+      case "unstarted": {
+        return [basicInfo, "Unstarted"];
+      }
       case "running": {
         return [basicInfo, "Running..."];
       }
@@ -246,7 +321,7 @@ export class BreadboardToolInvocation implements ToolInvocation<unknown> {
         return [
           basicInfo,
           "Error",
-          html` <pre>${JSON.stringify(state.error)}</pre> `,
+          html`<pre>${JSON.stringify(state.error)}</pre>`,
         ];
       }
       default: {
@@ -263,16 +338,18 @@ export class BreadboardToolInvocation implements ToolInvocation<unknown> {
       return nothing;
     }
     const artifacts = [];
-    for (const artifact of state.value.artifacts) {
-      const { mimeType } = artifact.inlineData;
+    for (const { id, mimeType } of state.value.artifacts) {
+      const entry = this.#artifacts.entry(id);
       if (mimeType.startsWith("image/")) {
-        artifacts.push(html`<img src="${artifact.handle}" />`);
+        artifacts.push(html`<img src=${entry.url.value ?? ""} />`);
       } else if (mimeType.startsWith("audio/")) {
-        artifacts.push(html`<audio controls src=${artifact.handle}></audio>`);
+        artifacts.push(
+          html`<audio controls src=${entry.url.value ?? ""}></audio>`
+        );
       } else {
         console.log(
           "Could not display artifact with unsupported MIME type",
-          artifact
+          mimeType
         );
       }
     }

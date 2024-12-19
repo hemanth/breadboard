@@ -6,13 +6,10 @@
 
 import { html, nothing } from "lit";
 import { Signal } from "signal-polyfill";
-import type { SignalArray } from "signal-utils/array";
 import type { SignalSet } from "signal-utils/set";
 import "../components/activate-modal.js";
-import { Deferred } from "../util/deferred.js";
 import type { EmptyObject } from "../util/empty-object.js";
 import type { Result } from "../util/result.js";
-import type { ToolProvider } from "./tool-provider.js";
 import type {
   BBRTTool,
   ToolAPI,
@@ -28,15 +25,15 @@ interface Inputs {
 type Outputs = EmptyObject;
 
 export class ActivateTool implements BBRTTool<Inputs, Outputs> {
-  #toolProviders: SignalArray<ToolProvider>;
-  #activeTools: SignalSet<BBRTTool>;
+  #availableTools: SignalSet<BBRTTool>;
+  #activeToolIds: SignalSet<string>;
 
   constructor(
-    toolProviders: SignalArray<ToolProvider>,
-    activeTools: SignalSet<BBRTTool>
+    availableTools: SignalSet<BBRTTool>,
+    activeToolIds: SignalSet<string>
   ) {
-    this.#toolProviders = toolProviders;
-    this.#activeTools = activeTools;
+    this.#availableTools = availableTools;
+    this.#activeToolIds = activeToolIds;
   }
 
   readonly metadata: ToolMetadata = {
@@ -73,31 +70,30 @@ export class ActivateTool implements BBRTTool<Inputs, Outputs> {
 
   invoke(args: Inputs) {
     return new ActivateToolInvocation(
-      this.#toolProviders,
-      this.#activeTools,
+      this.#availableTools,
+      this.#activeToolIds,
       args
     );
   }
 }
 
 class ActivateToolInvocation implements ToolInvocation<Outputs> {
-  readonly #toolProviders: SignalArray<ToolProvider>;
-  readonly #activeTools: SignalSet<BBRTTool>;
+  readonly #availableTools: SignalSet<BBRTTool>;
+  readonly #activeToolIds: SignalSet<string>;
   readonly #args: Inputs;
-  readonly #outcome = new Deferred<"allow" | "deny">();
+  readonly #outcome = Promise.withResolvers<"allow" | "deny">();
   readonly state = new Signal.State<ToolInvocationState<Outputs>>({
-    status: "running",
+    status: "unstarted",
   });
 
   constructor(
-    toolProviders: SignalArray<ToolProvider>,
-    activeTools: SignalSet<BBRTTool>,
+    availableTools: SignalSet<BBRTTool>,
+    activeToolIds: SignalSet<string>,
     args: Inputs
   ) {
-    this.#toolProviders = toolProviders;
-    this.#activeTools = activeTools;
+    this.#availableTools = availableTools;
+    this.#activeToolIds = activeToolIds;
     this.#args = args;
-    void this.#start();
   }
 
   render() {
@@ -115,13 +111,18 @@ class ActivateToolInvocation implements ToolInvocation<Outputs> {
     return nothing;
   }
 
-  async #start(): Promise<void> {
+  async start(): Promise<void> {
+    if (this.state.get().status !== "unstarted") {
+      return;
+    }
+    this.state.set({ status: "running" });
+
     const result = await this.#outcome.promise;
     switch (result) {
       case "allow": {
         const match = await this.#findTool(this.#args.name);
         if (match !== undefined) {
-          this.#activeTools.add(match);
+          this.#activeToolIds.add(match.metadata.id);
           this.state.set({
             status: "success",
             value: { output: {}, artifacts: [] },
@@ -129,7 +130,7 @@ class ActivateToolInvocation implements ToolInvocation<Outputs> {
         } else {
           this.state.set({
             status: "error",
-            error: "Error finding tool",
+            error: { message: "Error finding tool" },
           });
         }
         break;
@@ -137,7 +138,7 @@ class ActivateToolInvocation implements ToolInvocation<Outputs> {
       case "deny": {
         this.state.set({
           status: "error",
-          error: "User disallowed tool",
+          error: { message: "User disallowed tool" },
         });
         break;
       }
@@ -146,7 +147,7 @@ class ActivateToolInvocation implements ToolInvocation<Outputs> {
         console.error("Unknown result:", result);
         this.state.set({
           status: "error",
-          error: "Internal error",
+          error: { message: "Internal error" },
         });
         break;
       }
@@ -154,11 +155,9 @@ class ActivateToolInvocation implements ToolInvocation<Outputs> {
   }
 
   async #findTool(name: string): Promise<BBRTTool | undefined> {
-    for (const provider of this.#toolProviders) {
-      for (const tool of provider.tools()) {
-        if (tool.metadata.id === name) {
-          return tool;
-        }
+    for (const tool of this.#availableTools) {
+      if (tool.metadata.id === name) {
+        return tool;
       }
     }
     return undefined;

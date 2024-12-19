@@ -8,15 +8,31 @@ import { GraphDescriptor } from "@breadboard-ai/types";
 import { KeyboardCommand, KeyboardCommandDeps } from "./types";
 import * as BreadboardUI from "@breadboard-ai/shared-ui";
 import { EditSpec } from "@google-labs/breadboard";
+import { MAIN_BOARD_ID } from "../runtime/util";
+
+function isFocusedOnGraphRenderer(evt: Event) {
+  return evt
+    .composedPath()
+    .some((target) => target instanceof BreadboardUI.Elements.GraphRenderer);
+}
 
 export const DeleteCommand: KeyboardCommand = {
   keys: ["Delete", "Backspace"],
+
+  willHandle(evt: Event) {
+    return isFocusedOnGraphRenderer(evt);
+  },
 
   async do({
     runtime,
     selectionState,
     tab,
+    originalEvent,
   }: KeyboardCommandDeps): Promise<void> {
+    if (!isFocusedOnGraphRenderer(originalEvent)) {
+      return;
+    }
+
     const editor = runtime.edit.getEditor(tab);
     if (!editor) {
       throw new Error("Unable to edit graph");
@@ -47,7 +63,19 @@ export const DeleteCommand: KeyboardCommand = {
 export const SelectAllCommand: KeyboardCommand = {
   keys: ["Cmd+a", "Ctrl+a"],
 
-  async do({ runtime, tab }: KeyboardCommandDeps): Promise<void> {
+  willHandle(evt: Event) {
+    return isFocusedOnGraphRenderer(evt);
+  },
+
+  async do({
+    runtime,
+    tab,
+    originalEvent,
+  }: KeyboardCommandDeps): Promise<void> {
+    if (!isFocusedOnGraphRenderer(originalEvent)) {
+      return;
+    }
+
     const editor = runtime.edit.getEditor(tab);
     if (!editor) {
       return;
@@ -69,11 +97,20 @@ export const CopyCommand: KeyboardCommand = {
   messageType: BreadboardUI.Events.ToastType.INFORMATION,
   alwaysNotify: true,
 
+  willHandle(evt: Event) {
+    return isFocusedOnGraphRenderer(evt);
+  },
+
   async do({
     runtime,
     selectionState,
     tab,
+    originalEvent,
   }: KeyboardCommandDeps): Promise<void> {
+    if (!isFocusedOnGraphRenderer(originalEvent)) {
+      return;
+    }
+
     const editor = runtime.edit.getEditor(tab);
     if (!editor) {
       throw new Error("Unable to edit graph");
@@ -100,11 +137,20 @@ export const CopyCommand: KeyboardCommand = {
 export const CutCommand: KeyboardCommand = {
   keys: ["Cmd+x", "Ctrl+x"],
 
+  willHandle(evt: Event) {
+    return isFocusedOnGraphRenderer(evt);
+  },
+
   async do({
     runtime,
     selectionState,
     tab,
+    originalEvent,
   }: KeyboardCommandDeps): Promise<void> {
+    if (!isFocusedOnGraphRenderer(originalEvent)) {
+      return;
+    }
+
     const editor = runtime.edit.getEditor(tab);
     if (!editor) {
       throw new Error("Unable to edit graph");
@@ -144,12 +190,21 @@ export const CutCommand: KeyboardCommand = {
 // compiler continues to work on the assumption that it's a browser URL.
 const cP = "" + "canParse";
 function canParse(urlLike: string): boolean {
+  const maybeFragment = urlLike.startsWith("#");
+
   if (cP in URL) {
+    if (maybeFragment) {
+      return URL.canParse(urlLike, window.location.href);
+    }
     return URL.canParse(urlLike);
   }
 
   try {
-    new URL(urlLike);
+    if (maybeFragment) {
+      new URL(urlLike, window.location.href);
+    } else {
+      new URL(urlLike);
+    }
     return true;
   } catch (err) {
     return false;
@@ -159,9 +214,14 @@ function canParse(urlLike: string): boolean {
 export const PasteCommand: KeyboardCommand = {
   keys: ["Cmd+v", "Ctrl+v"],
 
+  willHandle() {
+    return true;
+  },
+
   async do({
     runtime,
     tab,
+    selectionState,
     pointerLocation,
   }: KeyboardCommandDeps): Promise<void> {
     const clipboardContents = await navigator.clipboard.readText();
@@ -169,7 +229,9 @@ export const PasteCommand: KeyboardCommand = {
     let boardUrl: string | undefined;
     try {
       if (canParse(clipboardContents)) {
-        boardUrl = (URL.parse(clipboardContents) ?? { href: undefined }).href;
+        boardUrl = (
+          URL.parse(clipboardContents, tab?.graph.url) ?? { href: undefined }
+        ).href;
       } else {
         boardContents = JSON.parse(clipboardContents);
         // TODO: Proper board checks.
@@ -192,10 +254,27 @@ export const PasteCommand: KeyboardCommand = {
         let spec: EditSpec[] = [];
         // 1a. Paste a board.
         if (boardContents) {
+          const destGraphIds = [];
+          if (selectionState) {
+            for (const id of selectionState.selectionState.graphs.keys()) {
+              if (id === MAIN_BOARD_ID) {
+                destGraphIds.push("");
+                continue;
+              }
+
+              destGraphIds.push(id);
+            }
+          }
+
+          if (destGraphIds.length === 0) {
+            destGraphIds.push("");
+          }
+
           spec = runtime.util.generateAddEditSpecFromDescriptor(
             boardContents,
             graph,
-            pointerLocation
+            pointerLocation,
+            destGraphIds
           );
         } else if (boardUrl) {
           // 1b. Paste a URL.

@@ -99,7 +99,7 @@ will need to be done manually.
 > guide](https://cloud.google.com/appengine/docs/standard/troubleshooting#default-sa-permissions)
 > for more information.
 
-1. Go to [Identity & Access Management](https://pantheon.corp.google.com/iam-admin/iam) in Google Cloud console.
+1. Go to [Identity & Access Management](https://console.cloud.google.com/iam-admin/iam) in Google Cloud console.
 1. Locate the default App Engine service account: **`${PROJECT_ID}@appspot.gserviceaccount.com`**
 1. Click **Edit Principal** (the pencil icon)
 1. Ensure that the service account has both the **Editor** and **Storage Admin** roles.
@@ -246,6 +246,12 @@ will be prompted to do so.
 Each user who wishes to connect to a Board Server is identified by an API key.
 These keys are created by an admin with write access to the `board-server` DB.
 
+Acquire application-default credentials:
+
+```sh
+gcloud auth application-default login
+```
+
 From the repository root:
 
 ```sh
@@ -276,7 +282,7 @@ our Visual Editor.
 ```yaml
 service: boards
 
-...
+# <other config omitted>
 
 env_variables:
   ALLOWED_ORIGINS: "{YOUR_VISUAL_EDITOR_ORIGIN}"
@@ -352,7 +358,7 @@ VITE_CONNECTION_SERVER_URL={YOUR_CONNECTION_SERVER}
 Re-deploy the Visual Editor.
 
 ```sh
-cd packages-visual/editor
+cd packages/visual-editor
 ```
 
 ```sh

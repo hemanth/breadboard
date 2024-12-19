@@ -13,6 +13,14 @@ export class CapabilitiesSelector extends LitElement {
   @property()
   capabiliies = new Map([
     [
+      "Describe",
+      {
+        icon: "eye",
+        code: `import describeGraph from "@describe";`,
+        description: "Allows asking a graph to describe itself.",
+      },
+    ],
+    [
       "Fetch",
       {
         icon: "fetch",
@@ -33,8 +41,16 @@ export class CapabilitiesSelector extends LitElement {
       "Invoke",
       {
         icon: "invoke",
-        code: `import externalInvoke from "@invoke";`,
+        code: `import describeGraph from "@invoke";`,
         description: "Runs another board and returns its output values.",
+      },
+    ],
+    [
+      "Output",
+      {
+        icon: "output",
+        code: `import output from "@output";`,
+        description: "Provides updates to the user.",
       },
     ],
   ]);
@@ -130,6 +146,14 @@ export class CapabilitiesSelector extends LitElement {
 
     ul li.capability-item .capability-icon.invoke::before {
       background-image: var(--bb-icon-invoke);
+    }
+
+    ul li.capability-item .capability-icon.output::before {
+      background-image: var(--bb-icon-output);
+    }
+
+    ul li.capability-item .capability-icon.eye::before {
+      background-image: var(--bb-icon-eye);
     }
   `;
 
