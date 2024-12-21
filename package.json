@@ -165,10 +165,10 @@
     "@typescript-eslint/parser": "^7.18.0",
     "ava": "^5.2.0",
     "eslint": "^8.57.1",
-    "eslint-plugin-expect-type": "^0.4.3",
+    "eslint-plugin-expect-type": "^0.6.2",
     "npm-ci": "^0.0.2",
     "rimraf": "^6.0.1",
-    "rollup": "^4.27.3",
+    "rollup": "^4.28.1",
     "rollup-plugin-dts": "^6.1.1",
     "syncpack": "^13.0.0",
     "typescript": "^5.6.3",
@@ -184,7 +184,7 @@
     "@rollup/rollup-linux-x64-gnu": "^4.27.4"
   },
   "dependencies": {
-    "express": "^4.21.1",
+    "express": "^4.21.2",
     "json-schema": "^0.4.0",
     "litegraph.js": "^0.7.18",
     "prettier": "^3.4.1"

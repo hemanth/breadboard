@@ -5,8 +5,9 @@
  */
 
 import { GraphBasedNodeHandler } from "./graph-based-node-handler.js";
-import { MutableGraphStore } from "./inspector/types.js";
-import { SENTINEL_BASE_URL } from "./loader/loader.js";
+import { contextFromMutableGraph } from "./inspector/graph-store.js";
+import { MutableGraph } from "./inspector/types.js";
+import { getGraphUrl } from "./loader/loader.js";
 import type {
   InputValues,
   Kit,
@@ -88,17 +89,20 @@ export async function getHandler(
   throw new Error(`No handler for node type "${type}"`);
 }
 
-export async function getGraphHandlerFromStore(
+export async function getGraphHandlerFromMutableGraph(
   type: NodeTypeIdentifier,
-  store: MutableGraphStore
+  mutable: MutableGraph
 ): Promise<NodeHandlerObject | undefined> {
   const nodeTypeUrl = graphUrlLike(type)
-    ? new URL(type, SENTINEL_BASE_URL)
+    ? getGraphUrl(type, contextFromMutableGraph(mutable))
     : undefined;
   if (!nodeTypeUrl) {
     return undefined;
   }
-  const result = store.addByURL(type, [], {});
+  const store = mutable.store;
+  const result = store.addByURL(type, [], {
+    outerGraph: mutable.graph,
+  }).mutable;
   return new GraphBasedNodeHandler({ graph: result.graph }, type);
 }
 
@@ -106,21 +110,24 @@ export async function getGraphHandler(
   type: NodeTypeIdentifier,
   context: NodeHandlerContext
 ): Promise<NodeHandlerObject | undefined> {
-  const { base = SENTINEL_BASE_URL } = context;
-  const nodeTypeUrl = graphUrlLike(type) ? new URL(type, base) : undefined;
+  const nodeTypeUrl = graphUrlLike(type)
+    ? getGraphUrl(type, context)
+    : undefined;
   if (!nodeTypeUrl) {
     return undefined;
   }
-  const { loader } = context;
-  if (!loader) {
-    throw new Error(`Cannot load graph for type "${type}" without a loader.`);
-  }
-  const loadResult = await loader.load(type, context);
-  if (!loadResult.success) {
+  const { graphStore } = context;
+  if (!graphStore) {
     throw new Error(
-      `Cannot load graph for type "${type}": ${loadResult.error}`
+      `Cannot load graph for type "${type}" without a graph store.`
     );
   }
 
+  const loadResult = await graphStore.load(type, context);
+  if (!loadResult.success) {
+    throw new Error(
+      `Loading graph for type "${type}" failed: ${loadResult.error}`
+    );
+  }
   return new GraphBasedNodeHandler(loadResult, type);
 }

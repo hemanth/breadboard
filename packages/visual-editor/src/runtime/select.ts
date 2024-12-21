@@ -16,13 +16,16 @@ import {
   WorkspaceSelectionChangeId,
   TabSelectionState,
   WorkspaceSelectionState,
+  MoveToSelection,
 } from "./types";
 import { InspectableGraph } from "@google-labs/breadboard";
-import { MAIN_BOARD_ID } from "../../../shared-ui/dist/constants/constants";
 import {
   createEmptyGraphSelectionState,
   createEmptyWorkspaceSelectionState,
   inspectableEdgeToString,
+  isBoardArrayBehavior,
+  isBoardBehavior,
+  MAIN_BOARD_ID,
 } from "./util";
 
 export class Select extends EventTarget {
@@ -61,7 +64,7 @@ export class Select extends EventTarget {
   #emit(
     tab: TabId,
     selectionChangeId: WorkspaceSelectionChangeId,
-    moveToSelection: "immediate" | "animated" | false = false
+    moveToSelection: MoveToSelection = false
   ) {
     const state = this.#createWorkspaceSelectionStateIfNeeded(tab);
     this.dispatchEvent(
@@ -128,7 +131,7 @@ export class Select extends EventTarget {
     nodeId: NodeIdentifier
   ) {
     this.#addToGraphsCollection(tab, graphId, "nodes", nodeId);
-    this.#emit(tab, selectionChangeId, "animated");
+    this.#emit(tab, selectionChangeId);
   }
 
   removeNode(
@@ -138,7 +141,7 @@ export class Select extends EventTarget {
     nodeId: NodeIdentifier
   ) {
     this.#removeFromGraphsCollection(tab, graphId, "nodes", nodeId);
-    this.#emit(tab, selectionChangeId, "animated");
+    this.#emit(tab, selectionChangeId);
   }
 
   addComment(
@@ -148,7 +151,7 @@ export class Select extends EventTarget {
     commentId: string
   ) {
     this.#addToGraphsCollection(tab, graphId, "comments", commentId);
-    this.#emit(tab, selectionChangeId, "animated");
+    this.#emit(tab, selectionChangeId);
   }
 
   removeComment(
@@ -158,7 +161,7 @@ export class Select extends EventTarget {
     commentId: string
   ) {
     this.#removeFromGraphsCollection(tab, graphId, "comments", commentId);
-    this.#emit(tab, selectionChangeId, "animated");
+    this.#emit(tab, selectionChangeId);
   }
 
   addEdge(
@@ -168,7 +171,7 @@ export class Select extends EventTarget {
     edgeId: string
   ) {
     this.#addToGraphsCollection(tab, graphId, "edges", edgeId);
-    this.#emit(tab, selectionChangeId, "animated");
+    this.#emit(tab, selectionChangeId);
   }
 
   removeEdge(
@@ -178,7 +181,7 @@ export class Select extends EventTarget {
     edgeId: string
   ) {
     this.#removeFromGraphsCollection(tab, graphId, "edges", edgeId);
-    this.#emit(tab, selectionChangeId, "animated");
+    this.#emit(tab, selectionChangeId);
   }
 
   addModule(
@@ -187,7 +190,7 @@ export class Select extends EventTarget {
     moduleId: ModuleIdentifier
   ) {
     this.#addToModulesCollection(tab, moduleId);
-    this.#emit(tab, selectionChangeId, "animated");
+    this.#emit(tab, selectionChangeId);
   }
 
   removeModule(
@@ -196,14 +199,15 @@ export class Select extends EventTarget {
     moduleId: ModuleIdentifier
   ) {
     this.#removeFromModulesCollection(tab, moduleId);
-    this.#emit(tab, selectionChangeId, "animated");
+    this.#emit(tab, selectionChangeId);
   }
 
   processSelections(
     tab: TabId,
     selectionChangeId: WorkspaceSelectionChangeId,
     selections: WorkspaceSelectionState | null,
-    replaceExistingSelections = true
+    replaceExistingSelections = true,
+    moveToSelection: MoveToSelection = false
   ) {
     if (selections === null) {
       this.#clear(tab);
@@ -232,13 +236,17 @@ export class Select extends EventTarget {
       for (const edges of selectionState.edges) {
         this.#addToGraphsCollection(tab, id, "edges", edges);
       }
+
+      for (const references of selectionState.references) {
+        this.#addToGraphsCollection(tab, id, "references", references);
+      }
     }
 
     for (const id of selections.modules) {
       this.#addToModulesCollection(tab, id);
     }
 
-    this.#emit(tab, selectionChangeId, "animated");
+    this.#emit(tab, selectionChangeId, moveToSelection);
   }
 
   selectNode(
@@ -268,6 +276,25 @@ export class Select extends EventTarget {
       const selections: GraphSelectionState = createEmptyGraphSelectionState();
       for (const node of graph.nodes()) {
         selections.nodes.add(node.descriptor.id);
+
+        const referencePorts = node
+          .currentPorts()
+          .inputs.ports.filter(
+            (port) =>
+              isBoardBehavior(port.schema) || isBoardArrayBehavior(port.schema)
+          );
+
+        for (const port of referencePorts) {
+          if (Array.isArray(port.value)) {
+            for (let i = 0; i < port.value.length; i++) {
+              selections.references.add(
+                `${node.descriptor.id}|${port.name}|${i}`
+              );
+            }
+          } else {
+            selections.references.add(`${node.descriptor.id}|${port.name}|0`);
+          }
+        }
       }
 
       for (const edge of graph.edges()) {

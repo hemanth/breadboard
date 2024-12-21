@@ -10,6 +10,7 @@ import type {
   InspectablePort,
   NodeConfiguration,
   NodeDescriptor,
+  PortIdentifier,
   Schema,
 } from "@google-labs/breadboard";
 import type {
@@ -41,6 +42,8 @@ const eventInit = {
   cancelable: true,
   composed: true,
 };
+
+type MoveToSelection = "immediate" | "animated" | false;
 
 export enum ToastType {
   INFORMATION = "information",
@@ -307,6 +310,24 @@ export class DelayEvent extends Event {
   }
 }
 
+export class DragConnectorStartEvent extends Event {
+  static eventName = "bbdragconnectorstart";
+
+  constructor(
+    public readonly location: { x: number; y: number },
+    public readonly graphId: GraphIdentifier
+  ) {
+    super(DragConnectorStartEvent.eventName, { ...eventInit });
+  }
+}
+
+export class DragConnectorCancelledEvent extends Event {
+  static eventName = "bbdragconnectorcancelled";
+
+  constructor() {
+    super(DragConnectorCancelledEvent.eventName, { ...eventInit });
+  }
+}
 /**
  * @deprecated
  */
@@ -362,6 +383,17 @@ export class KitNodeChosenEvent extends Event {
  * Workspace management
  */
 
+export class WorkspaceSelectionMoveEvent extends Event {
+  static eventName = "bbworkspaceselectionmove";
+  constructor(
+    public readonly selections: WorkspaceSelectionState,
+    public readonly targetGraphId: GraphIdentifier | null,
+    public readonly delta: { x: number; y: number }
+  ) {
+    super(WorkspaceSelectionMoveEvent.eventName, { ...eventInit });
+  }
+}
+
 export class WorkspaceVisualUpdateEvent extends Event {
   static eventName = "bbworkspacevisualupdate";
   constructor(
@@ -378,7 +410,8 @@ export class WorkspaceSelectionStateEvent extends Event {
   constructor(
     public readonly selectionChangeId: WorkspaceSelectionChangeId,
     public readonly selections: WorkspaceSelectionState | null,
-    public readonly replaceExistingSelections = true
+    public readonly replaceExistingSelections = true,
+    public readonly moveToSelection: MoveToSelection = false
   ) {
     super(WorkspaceSelectionStateEvent.eventName, { ...eventInit });
   }
@@ -690,6 +723,31 @@ export class UserOutputEvent extends Event {
 
   constructor(public readonly values: UserOutputValues) {
     super(UserOutputEvent.eventName, { ...eventInit });
+  }
+}
+
+export class NodeCreateReferenceEvent extends Event {
+  static eventName = "bbnodecreatereference";
+
+  constructor(
+    public readonly graphId: GraphIdentifier,
+    public readonly nodeId: NodeIdentifier,
+    public readonly portId: PortIdentifier,
+    public readonly value: string
+  ) {
+    super(NodeCreateReferenceEvent.eventName, { ...eventInit });
+  }
+}
+
+export class NodeDeleteReferenceEvent extends Event {
+  static eventName = "bbnodedeletereference";
+
+  constructor(
+    public readonly graphId: GraphIdentifier,
+    public readonly nodeId: NodeIdentifier,
+    public readonly portId: PortIdentifier
+  ) {
+    super(NodeDeleteReferenceEvent.eventName, { ...eventInit });
   }
 }
 

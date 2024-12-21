@@ -10,7 +10,12 @@ import {
   InspectablePort,
   NodeIdentifier,
 } from "@google-labs/breadboard";
-import type { EdgeData, GraphSelectionState } from "../../types/types.js";
+import {
+  ReferenceIdentifier,
+  WorkspaceSelectionState,
+  type EdgeData,
+  type GraphSelectionState,
+} from "../../types/types.js";
 import { ComponentExpansionState, VisualMetadata } from "./types.js";
 
 const documentStyles = getComputedStyle(document.documentElement);
@@ -124,10 +129,18 @@ export function createRandomID(type: string) {
   return `${type}-${nextNodeId[0]}`;
 }
 
+export function emptyWorkspaceSelectionState(): WorkspaceSelectionState {
+  return {
+    graphs: new Map(),
+    modules: new Set(),
+  };
+}
+
 export function emptySelectionState(): GraphSelectionState {
   return {
     nodes: new Set<NodeIdentifier>(),
     comments: new Set<string>(),
     edges: new Set<string>(),
+    references: new Set<ReferenceIdentifier>(),
   };
 }

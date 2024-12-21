@@ -14,6 +14,7 @@ import GeminiKit from "@google-labs/gemini-kit";
 import AgentKit from "@google-labs/agent-kit/agent.kit.json" assert { type: "json" };
 
 import "@breadboard-ai/shared-ui/editor";
+import "@breadboard-ai/shared-ui/editor";
 
 import {
   GraphDescriptor,
@@ -37,20 +38,18 @@ export class BoardEmbed extends LitElement {
   @property({ reflect: true })
   active = false;
 
-  #data: Promise<TemplateResult> | null = null;
   #observer = new IntersectionObserver(
     (entries) => {
       this.active = false;
-
       if (entries.length === 0) {
         return;
       }
-
       this.active = entries[0].isIntersecting;
     },
     { rootMargin: "80px", threshold: 0 }
   );
 
+  #data: Promise<TemplateResult> | null = null;
   static styles = css`
     :host {
       display: flex;
@@ -106,8 +105,7 @@ export class BoardEmbed extends LitElement {
 
   disconnectedCallback(): void {
     super.disconnectedCallback();
-
-    this.#observer.unobserve(this);
+    this.#observer.disconnect();
   }
 
   async loadBoard() {
@@ -169,6 +167,7 @@ export class BoardEmbed extends LitElement {
         .showNodePreviewValues=${false}
         .showReadOnlyLabel=${false}
         .readOnly=${true}
+        .hideRibbonMenu=${true}
       ></bb-editor>
       <div id="overlay"></div>
       ${this.url

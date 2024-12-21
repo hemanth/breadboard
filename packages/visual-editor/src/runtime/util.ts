@@ -15,6 +15,7 @@ import {
   NodeConfiguration,
   NodeDescriptor,
   NodeIdentifier,
+  Schema,
 } from "@google-labs/breadboard";
 import {
   EditChangeId,
@@ -23,10 +24,23 @@ import {
   WorkspaceSelectionState,
 } from "./types";
 
-const MAIN_BOARD_ID = "Main board";
+export const MAIN_BOARD_ID = "Main board";
+
+export function isBoardBehavior(schema: Schema): boolean {
+  return schema.behavior?.includes("board") ?? false;
+}
+
+export function isBoardArrayBehavior(schema: Schema): boolean {
+  if (schema.type !== "array") return false;
+  if (!schema.items) return false;
+  if (Array.isArray(schema.items)) return false;
+  if (!schema.items.behavior) return false;
+  return schema.items.behavior?.includes("board") ?? false;
+}
 
 export function edgeToString(edge: Edge): string {
-  return `${edge.from}:${edge.out}->${edge.to}:${edge.in}`;
+  const edgeIn = edge.out === "*" ? "*" : edge.in;
+  return `${edge.from}:${edge.out}->${edge.to}:${edgeIn}`;
 }
 
 export function inspectableEdgeToString(edge: InspectableEdge): string {
@@ -61,6 +75,7 @@ export function createEmptyGraphSelectionState(): GraphSelectionState {
     nodes: new Set(),
     comments: new Set(),
     edges: new Set(),
+    references: new Set(),
   };
 }
 
@@ -144,6 +159,62 @@ export function generateDeleteEditSpecFrom(
       edits.push({ type: "removeedge", graphId, edge: edge.raw() });
     }
 
+    // References.
+    const referenceIndexes: number[] = [];
+    for (const reference of state.references) {
+      const [nodeId, portId, indexStr] = reference.split("|");
+      if (!nodeId || !portId || !indexStr) {
+        continue;
+      }
+
+      const index = Number.parseInt(indexStr);
+      if (Number.isNaN(index)) {
+        console.warn(`Unexpected index in references: '${indexStr}'`);
+        continue;
+      }
+
+      referenceIndexes.push(index);
+    }
+
+    for (const reference of state.references) {
+      const [nodeId, portId, indexStr] = reference.split("|");
+      if (!nodeId || !portId || !indexStr) {
+        continue;
+      }
+
+      const index = Number.parseInt(indexStr);
+      if (Number.isNaN(index)) {
+        console.warn(`Unexpected index in references: '${indexStr}'`);
+        continue;
+      }
+
+      const configuration = graph.nodeById(nodeId)?.configuration();
+      if (!configuration) {
+        continue;
+      }
+
+      const newConfiguration = structuredClone(configuration);
+      if (!newConfiguration[portId]) {
+        continue;
+      }
+
+      if (Array.isArray(newConfiguration[portId])) {
+        newConfiguration[portId] = newConfiguration[portId].filter((_, idx) => {
+          return !referenceIndexes.includes(idx);
+        });
+      } else {
+        delete newConfiguration[portId];
+      }
+
+      edits.push({
+        type: "changeconfiguration",
+        graphId,
+        id: nodeId,
+        configuration: newConfiguration,
+        reset: true,
+      });
+    }
+
     // Nodes.
     for (const nodeId of state.nodes) {
       edits.push({ type: "removenode", id: nodeId, graphId });
@@ -194,7 +265,8 @@ export function generateDeleteEditSpecFrom(
 function adjustNodePosition(
   node: NodeDescriptor | CommentNode,
   leftMostNode: { x: number; y: number },
-  pointerLocation: { x: number; y: number }
+  pointerLocation: { x: number; y: number },
+  graphOffset = 0
 ) {
   node.metadata ??= {};
   if ("type" in node) {
@@ -207,8 +279,8 @@ function adjustNodePosition(
     collapsed: string;
   };
 
-  location.x = location.x - leftMostNode.x + pointerLocation.x;
-  location.y = location.y - leftMostNode.y + pointerLocation.y;
+  location.x = location.x - leftMostNode.x + pointerLocation.x + graphOffset;
+  location.y = location.y - leftMostNode.y + pointerLocation.y + graphOffset;
 }
 
 function getLeftMostLocation(
@@ -407,118 +479,118 @@ export function generateAddEditSpecFromComponentType(
 }
 
 export function generateAddEditSpecFromDescriptor(
-  sourceGraph: GraphDescriptor,
-  targetGraph: InspectableGraph,
-  pointerLocation: { x: number; y: number } = { x: 0, y: 0 }
+  source: GraphDescriptor,
+  graph: InspectableGraph,
+  pointerLocation: { x: number; y: number } = { x: 0, y: 0 },
+  destGraphIds: GraphIdentifier[]
 ) {
   const edits: EditSpec[] = [];
 
-  // Find the left-most node in the target graph and then use that as the base
-  // for all node locations.
-  let leftMostNode = getLeftMostLocation(sourceGraph);
-  const subGraphs = sourceGraph.graphs || {};
-  for (const subGraph of Object.values(subGraphs)) {
-    leftMostNode = getLeftMostLocation(subGraph, leftMostNode);
-  }
-
-  // If all else fails, reset to zero.
-  if (isInvalidPosition(leftMostNode)) {
-    if (
-      leftMostNode.x === Number.POSITIVE_INFINITY ||
-      leftMostNode.y === Number.POSITIVE_INFINITY
-    ) {
-      leftMostNode.x = leftMostNode.y = 0;
-    }
-  }
-
-  // Nodes.
-  const remappedNodes = new Map<NodeIdentifier, NodeIdentifier>();
-  for (const node of sourceGraph.nodes) {
-    if (targetGraph.nodeById(node.id)) {
-      const newId = createNodeId();
-      // Track any renamed nodes so we can update edges.
-      remappedNodes.set(node.id, newId);
-      node.id = newId;
+  const graphToSpec = (sourceGraph: GraphDescriptor) => {
+    // Find the left-most node in the target graph and then use that as the base
+    // for all node locations.
+    let leftMostNode = getLeftMostLocation(sourceGraph);
+    const subGraphs = sourceGraph.graphs || {};
+    for (const subGraph of Object.values(subGraphs)) {
+      leftMostNode = getLeftMostLocation(subGraph, leftMostNode);
     }
 
-    adjustNodePosition(node, leftMostNode, pointerLocation);
-
-    edits.push({ type: "addnode", node, graphId: "" });
-  }
-
-  // Edges.
-  for (const edge of sourceGraph.edges) {
-    const remappedFrom = remappedNodes.get(edge.from);
-    const remappedTo = remappedNodes.get(edge.to);
-    if (remappedFrom) {
-      edge.from = remappedFrom;
-    }
-    if (remappedTo) {
-      edge.to = remappedTo;
+    // If all else fails, reset to zero.
+    if (isInvalidPosition(leftMostNode)) {
+      if (
+        leftMostNode.x === Number.POSITIVE_INFINITY ||
+        leftMostNode.y === Number.POSITIVE_INFINITY
+      ) {
+        leftMostNode.x = leftMostNode.y = 0;
+      }
     }
 
-    edits.push({ type: "addedge", edge, graphId: "" });
-  }
-
-  // Comments.
-  const comments = sourceGraph.metadata?.comments;
-  if (comments) {
-    const existingMetadata = structuredClone(targetGraph.metadata() ?? {});
-    existingMetadata.comments ??= [];
-    for (const comment of comments) {
-      comment.id = createNodeId();
-      adjustNodePosition(comment, leftMostNode, pointerLocation);
-      existingMetadata.comments.push(comment);
-    }
-
-    edits.push({
-      type: "changegraphmetadata",
-      metadata: { ...existingMetadata },
-      graphId: "",
-    });
-  }
-
-  // Subgraphs.
-  for (const [id, subGraph] of Object.entries(sourceGraph.graphs ?? {})) {
-    const graphs = targetGraph.graphs();
-    const newSubGraph = structuredClone(subGraph);
-    let graphId = id;
-    if (graphs && graphs[id]) {
-      graphId = createGraphId();
-    }
-
-    // Remove any existing comments.
-    newSubGraph.metadata ??= {};
-    newSubGraph.metadata.comments = [];
-
-    // Now update all node positions.
-    for (const node of newSubGraph.nodes) {
-      adjustNodePosition(node, leftMostNode, pointerLocation);
-    }
-
-    // Add the subgraph.
-    if (!graphs || !graphs[graphId]) {
-      edits.push({ type: "addgraph", id: graphId, graph: newSubGraph });
-    }
-
-    // Add any comments back in.
-    const comments = subGraph.metadata?.comments;
-    if (comments) {
-      const existingMetadata = structuredClone(newSubGraph.metadata ?? {});
-      existingMetadata.comments ??= [];
-      for (const comment of comments) {
-        comment.id = createNodeId();
-        adjustNodePosition(comment, leftMostNode, pointerLocation);
-        existingMetadata.comments.push(comment);
+    let graphOffset = 0;
+    for (const graphId of destGraphIds) {
+      const targetGraph = graphId === "" ? graph : graph.graphs()?.[graphId];
+      if (!targetGraph) {
+        continue;
       }
 
-      edits.push({
-        type: "changegraphmetadata",
-        metadata: { ...existingMetadata },
-        graphId,
-      });
+      // Nodes.
+      const remappedNodes = new Map<NodeIdentifier, NodeIdentifier>();
+      for (const sourceNode of sourceGraph.nodes) {
+        const node = structuredClone(sourceNode);
+        adjustNodePosition(node, leftMostNode, pointerLocation, graphOffset);
+
+        if (targetGraph.nodeById(node.id)) {
+          const newId = createNodeId();
+          // Track any renamed nodes so we can update edges.
+          remappedNodes.set(node.id, newId);
+          node.id = newId;
+        }
+
+        edits.push({ type: "addnode", node, graphId });
+      }
+
+      // Edges.
+      for (const sourceEdge of sourceGraph.edges) {
+        const edge = structuredClone(sourceEdge);
+
+        const remappedFrom = remappedNodes.get(edge.from);
+        const remappedTo = remappedNodes.get(edge.to);
+        if (remappedFrom) {
+          edge.from = remappedFrom;
+        }
+        if (remappedTo) {
+          edge.to = remappedTo;
+        }
+
+        edits.push({ type: "addedge", edge, graphId });
+      }
+
+      const existingMetadata = structuredClone(targetGraph.metadata() ?? {});
+      let updateGraphMetadata = false;
+
+      // Comments.
+      const comments = sourceGraph.metadata?.comments;
+      if (comments) {
+        existingMetadata.comments ??= [];
+        for (const sourceComment of comments) {
+          const comment = structuredClone(sourceComment);
+
+          comment.id = createNodeId();
+          adjustNodePosition(
+            comment,
+            leftMostNode,
+            pointerLocation,
+            graphOffset
+          );
+          existingMetadata.comments.push(comment);
+          updateGraphMetadata = true;
+        }
+      }
+
+      // Also copy "describer", if present
+      const describer = sourceGraph.metadata?.describer;
+      if (describer) {
+        existingMetadata.describer = describer;
+        updateGraphMetadata = true;
+      }
+
+      if (updateGraphMetadata) {
+        edits.push({
+          type: "changegraphmetadata",
+          metadata: { ...existingMetadata },
+          graphId,
+        });
+      }
+
+      graphOffset += 10;
     }
-  }
+
+    // Subgraphs.
+    for (const subGraph of Object.values(sourceGraph.graphs ?? {})) {
+      graphToSpec(subGraph);
+    }
+  };
+
+  graphToSpec(source);
 
   return edits;
 }

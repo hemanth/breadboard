@@ -27,6 +27,7 @@ import {
   NodeConfiguration,
   SerializedRun,
   MutableGraphStore,
+  defaultModuleContent,
 } from "@google-labs/breadboard";
 import { getDataStore, getRunStore } from "@breadboard-ai/data-store";
 import { classMap } from "lit/directives/class-map.js";
@@ -47,7 +48,6 @@ import {
 } from "./runtime/types";
 import { createPastRunObserver } from "./utils/past-run-observer";
 import { getRunNodeConfig } from "./utils/run-node";
-import { TopGraphObserver } from "../../shared-ui/dist/utils/top-graph-observer";
 import {
   createTokenVendor,
   TokenVendor,
@@ -55,7 +55,6 @@ import {
 
 import { sandbox } from "./sandbox";
 import { InputValues, Module, ModuleIdentifier } from "@breadboard-ai/types";
-import { defaultModuleContent } from "./utils/default-module-content";
 import { KeyboardCommand, KeyboardCommandDeps } from "./commands/types";
 import {
   CopyCommand,
@@ -126,6 +125,9 @@ export class Main extends LitElement {
 
   @state()
   showWelcomePanel = false;
+
+  @state()
+  showBoardReferenceMarkers = false;
 
   @state()
   showOpenBoardOverlay = false;
@@ -215,6 +217,7 @@ export class Main extends LitElement {
   #uiRef: Ref<BreadboardUI.Elements.UI> = createRef();
   #tooltipRef: Ref<BreadboardUI.Elements.Tooltip> = createRef();
   #tabContainerRef: Ref<HTMLDivElement> = createRef();
+  #dragConnectorRef: Ref<BreadboardUI.Elements.DragConnector> = createRef();
   #boardId = 0;
   #boardPendingSave = false;
   #tabSaveId = new Map<
@@ -271,6 +274,14 @@ export class Main extends LitElement {
    */
   @state()
   graphTopologyUpdateId: number = 0;
+
+  /**
+   * Similar to graphTopologyUpdateId, but for all graphs in the graph store.
+   * This is useful for tracking all changes to all graphs, like in
+   * component/boards selectors.
+   */
+  @state()
+  graphStoreUpdateId: number = 0;
 
   #globalCommands: BreadboardUI.Types.Command[] = [
     {
@@ -459,6 +470,7 @@ export class Main extends LitElement {
         this.#graphStore.addEventListener("update", (evt) => {
           const { mainGraphId } = evt;
           const current = this.tab?.mainGraphId;
+          this.graphStoreUpdateId++;
           if (
             !current ||
             (mainGraphId !== current && !evt.affectedGraphs.includes(current))
@@ -879,7 +891,9 @@ export class Main extends LitElement {
       target instanceof HTMLInputElement ||
       target instanceof HTMLTextAreaElement ||
       target instanceof HTMLSelectElement ||
-      target instanceof HTMLCanvasElement
+      target instanceof HTMLCanvasElement ||
+      target instanceof BreadboardUI.Elements.ModuleEditor ||
+      target instanceof BreadboardUI.Elements.ActivityLog
     );
   }
 
@@ -933,7 +947,7 @@ export class Main extends LitElement {
     } as const;
 
     for (const [keys, command] of this.#commands) {
-      if (keys.includes(key)) {
+      if (keys.includes(key) && command.willHandle(evt)) {
         evt.preventDefault();
         evt.stopImmediatePropagation();
 
@@ -1018,10 +1032,10 @@ export class Main extends LitElement {
         return;
       }
 
-      let saveMessage = "Board saved";
+      let saveMessage = "Workspace saved";
       if (this.#nodeConfiguratorRef.value) {
         this.#nodeConfiguratorRef.value.processData();
-        saveMessage = "Board and configuration saved";
+        saveMessage = "Workspace and configuration saved";
       }
 
       this.#attemptBoardSave(this.tab, saveMessage);
@@ -1996,15 +2010,9 @@ export class Main extends LitElement {
         const observers = this.#runtime?.run.getObservers(this.tab?.id ?? null);
         const topGraphResult =
           observers?.topGraphObserver?.current() ??
-          TopGraphObserver.entryResult(this.tab?.graph);
+          BreadboardUI.Utils.TopGraphObserver.entryResult(this.tab?.graph);
         const inputsFromLastRun = runs[1]?.inputs() ?? null;
         const tabURLs = this.#runtime.board.getTabURLs();
-        const showNodeTypeDescriptions =
-          (this.#settings
-            ?.getSection(BreadboardUI.Types.SETTINGS_TYPE.GENERAL)
-            .items.get("Show Node Type Descriptions")?.value as boolean) ??
-          false;
-
         const offerConfigurationEnhancements =
           this.#settings?.getItem(
             BreadboardUI.Types.SETTINGS_TYPE.GENERAL,
@@ -2099,7 +2107,10 @@ export class Main extends LitElement {
               this.showNewWorkspaceItemOverlay = false;
 
               let source: Module | undefined = undefined;
+              const title = evt.title ?? "Untitled item";
+              let id: string = crypto.randomUUID();
               if (evt.itemType === "imperative") {
+                id = title.replace(/[^a-zA-Z0-9]/g, "-");
                 const createAsTypeScript =
                   this.#settings
                     ?.getSection(BreadboardUI.Types.SETTINGS_TYPE.GENERAL)
@@ -2110,7 +2121,7 @@ export class Main extends LitElement {
                   source = {
                     code: "",
                     metadata: {
-                      title: evt.title ?? "Untitled item",
+                      title,
                       source: {
                         code: defaultModuleContent("typescript"),
                         language: "typescript",
@@ -2121,7 +2132,7 @@ export class Main extends LitElement {
                   source = {
                     code: defaultModuleContent(),
                     metadata: {
-                      title: evt.title ?? "Untitled item",
+                      title,
                     },
                   };
                 }
@@ -2130,8 +2141,8 @@ export class Main extends LitElement {
               await this.#runtime.edit.createWorkspaceItem(
                 this.tab,
                 evt.itemType,
-                evt.title ?? "Untitled item",
-                crypto.randomUUID(),
+                title,
+                id,
                 source
               );
             }}
@@ -2310,7 +2321,6 @@ export class Main extends LitElement {
             .boardServers=${this.#boardServers}
             .showTypes=${false}
             .offerConfigurationEnhancements=${offerConfigurationEnhancements}
-            .showNodeTypeDescriptions=${showNodeTypeDescriptions}
             .readOnly=${this.tab?.readOnly}
             @bbworkspaceselectionstate=${(
               evt: BreadboardUI.Events.WorkspaceSelectionStateEvent
@@ -2325,7 +2335,9 @@ export class Main extends LitElement {
                 this.#runtime.select.processSelections(
                   this.tab.id,
                   evt.selectionChangeId,
-                  evt.selections
+                  evt.selections,
+                  evt.replaceExistingSelections,
+                  evt.moveToSelection
                 );
               }
             }}
@@ -2354,7 +2366,7 @@ export class Main extends LitElement {
                   // We should probably have some way to codify the shape.
                   const invocationResult =
                     await this.#runtime.run.invokeSideboard(
-                      this.tab!.kits,
+                      this.tab!.boardServerKits,
                       "/side-boards/enhance-configuration.bgl.json",
                       this.#runtime.board.getLoader(),
                       { config },
@@ -2879,7 +2891,7 @@ export class Main extends LitElement {
 
         const tabs = this.#runtime?.board.tabs ?? [];
         const ui = html`<header>
-          <div id="header-bar" ?inert=${showingOverlay}>
+          <div id="header-bar" data-active=${this.tab ? "true" : nothing} ?inert=${showingOverlay}>
           <button
             id="show-nav"
             @click=${() => {
@@ -2938,6 +2950,11 @@ export class Main extends LitElement {
                   saveTitle = "Error";
                   break;
                 }
+
+                case BreadboardUI.Types.BOARD_SAVE_STATUS.UNSAVED: {
+                  saveTitle = "Unsaved";
+                  break;
+                }
               }
 
               return html`<div
@@ -2946,27 +2963,6 @@ export class Main extends LitElement {
                   active: this.tab?.id === tab.id,
                 })}
               >
-                <button
-                  class="tab-overflow"
-                  @click=${(evt: PointerEvent) => {
-                    if (!(evt.target instanceof HTMLButtonElement)) {
-                      return;
-                    }
-
-                    const btnBounds = evt.target.getBoundingClientRect();
-                    const x = btnBounds.x + btnBounds.width;
-                    const y = btnBounds.y + btnBounds.height;
-
-                    this.#boardOverflowMenuConfiguration = {
-                      tabId: tab.id,
-                      x,
-                      y,
-                    };
-                    this.showBoardOverflowMenu = true;
-                  }}
-                >
-                  Overflow
-                </button>
                 <button
                   class=${classMap({
                     "back-to-main-board": true,
@@ -3007,6 +3003,29 @@ export class Main extends LitElement {
                     ></span
                   >
                 </button>
+
+                <button
+                  class="tab-overflow"
+                  @click=${(evt: PointerEvent) => {
+                    if (!(evt.target instanceof HTMLButtonElement)) {
+                      return;
+                    }
+
+                    const btnBounds = evt.target.getBoundingClientRect();
+                    const x = btnBounds.x + btnBounds.width;
+                    const y = btnBounds.y + btnBounds.height;
+
+                    this.#boardOverflowMenuConfiguration = {
+                      tabId: tab.id,
+                      x,
+                      y,
+                    };
+                    this.showBoardOverflowMenu = true;
+                  }}
+                >
+                  Overflow
+                </button>
+
                 <button
                   @click=${() => {
                     this.#runtime.board.closeTab(id);
@@ -3045,7 +3064,7 @@ export class Main extends LitElement {
               .moduleId=${this.tab?.moduleId ?? null}
               .runs=${runs ?? null}
               .topGraphResult=${topGraphResult}
-              .kits=${this.tab?.kits ?? []}
+              .boardServerKits=${this.tab?.boardServerKits ?? []}
               .loader=${this.#runtime.board.getLoader()}
               .status=${tabStatus}
               .boardId=${this.#boardId}
@@ -3061,6 +3080,8 @@ export class Main extends LitElement {
               .selectionState=${this.#selectionState}
               .visualChangeId=${this.#lastVisualChangeId}
               .graphTopologyUpdateId=${this.graphTopologyUpdateId}
+              .graphStoreUpdateId=${this.graphStoreUpdateId}
+              .showBoardReferenceMarkers=${this.showBoardReferenceMarkers}
               @bbinputenter=${async (
                 event: BreadboardUI.Events.InputEnterEvent
               ) => {
@@ -3102,6 +3123,53 @@ export class Main extends LitElement {
                   }
                 }
               }}
+              @bbgraphboardserverloadrequest=${async (
+                evt: BreadboardUI.Events.GraphBoardServerLoadRequestEvent
+              ) => {
+                this.#attemptBoardStart(
+                  new BreadboardUI.Events.StartEvent(evt.url)
+                );
+              }}
+              @bbdragconnectorstart=${(
+                evt: BreadboardUI.Events.DragConnectorStartEvent
+              ) => {
+                if (!this.#dragConnectorRef.value) {
+                  return;
+                }
+
+                this.#dragConnectorRef.value.start = evt.location;
+                this.#dragConnectorRef.value.source = evt.graphId;
+                this.showBoardReferenceMarkers = true;
+              }}
+              @bbworkspaceselectionmove=${async (
+                evt: BreadboardUI.Events.WorkspaceSelectionMoveEvent
+              ) => {
+                if (!this.tab) {
+                  return;
+                }
+
+                await this.#runtime.edit.moveToNewGraph(
+                  this.tab,
+                  evt.selections,
+                  evt.targetGraphId,
+                  evt.delta
+                );
+              }}
+              @bbnodecreatereference=${async (
+                evt: BreadboardUI.Events.NodeCreateReferenceEvent
+              ) => {
+                if (!this.tab) {
+                  return;
+                }
+
+                await this.#runtime.edit.createReference(
+                  this.tab,
+                  evt.graphId,
+                  evt.nodeId,
+                  evt.portId,
+                  evt.value
+                );
+              }}
               @bbeditorpositionchange=${(
                 evt: BreadboardUI.Events.EditorPointerPositionChangeEvent
               ) => {
@@ -3119,7 +3187,8 @@ export class Main extends LitElement {
                   this.tab.id,
                   evt.selectionChangeId,
                   evt.selections,
-                  evt.replaceExistingSelections
+                  evt.replaceExistingSelections,
+                  evt.moveToSelection
                 );
               }}
               @bbworkspacevisualupdate=${(
@@ -3612,6 +3681,30 @@ export class Main extends LitElement {
             ></bb-command-palette>`
           : nothing;
 
+        const dragConnector = html`<bb-drag-connector
+          ${ref(this.#dragConnectorRef)}
+          @bbnodecreatereference=${async (
+            evt: BreadboardUI.Events.NodeCreateReferenceEvent
+          ) => {
+            if (!this.tab) {
+              return;
+            }
+
+            await this.#runtime.edit.createReference(
+              this.tab,
+              evt.graphId,
+              evt.nodeId,
+              evt.portId,
+              evt.value
+            );
+
+            this.showBoardReferenceMarkers = false;
+          }}
+          @bbdragconnectorcancelled=${() => {
+            this.showBoardReferenceMarkers = false;
+          }}
+        ></bb-drag-connector>`;
+
         return [
           ui,
           boardOverlay,
@@ -3628,6 +3721,7 @@ export class Main extends LitElement {
           openDialogOverlay,
           commandPalette,
           modulePalette,
+          dragConnector,
           boardOverflowMenu,
         ];
       });

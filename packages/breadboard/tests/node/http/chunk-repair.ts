@@ -48,4 +48,10 @@ describe("Chunk Repair Transform", async () => {
       ["foo\n\n", "bar\n\n", "baz\n\n", "qux\n\n"]
     );
   });
+  test("chunks broken at boundary", async () => {
+    await repair(
+      ['data: ["input"', ',{"node":{}}]\n', "\n"],
+      ['data: ["input",{"node":{}}]\n\n']
+    );
+  });
 });

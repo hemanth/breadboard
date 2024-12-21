@@ -19,12 +19,17 @@ export type DescriberOutputs = { inputSchema: unknown; outputSchema: unknown };
 export type InvokeInputs = Values;
 export type InvokeOutputs = Values;
 
-export type Capability = (inputs: Values) => Promise<Values | void>;
+export type Capability = (
+  inputs: Values,
+  path: number[]
+) => Promise<Values | void>;
 
 export type CapabilitySpec = {
   fetch?: Capability;
   invoke?: Capability;
   secrets?: Capability;
+  output?: Capability;
+  describe?: Capability;
 };
 
 export type Sandbox = {

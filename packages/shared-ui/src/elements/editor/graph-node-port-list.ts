@@ -28,6 +28,16 @@ export class GraphNodePortList extends PIXI.Container {
 
   readOnly = false;
 
+  constructor() {
+    super();
+
+    this.on("destroyed", () => {
+      for (const child of this.children) {
+        child.destroy({ children: true });
+      }
+    });
+  }
+
   get empty() {
     return this.#inPortsData.size === 0;
   }
@@ -144,10 +154,10 @@ export class GraphNodePortList extends PIXI.Container {
       // no value set.
       if (port.status !== PortStatus.Missing && port.value === undefined) {
         portItem?.label.removeFromParent();
-        portItem?.label.destroy();
+        portItem?.label.destroy({ children: true });
 
         portItem?.nodePort.removeFromParent();
-        portItem?.nodePort.destroy();
+        portItem?.nodePort.destroy({ children: true });
 
         this.#inPortsData.delete(inPortName);
       }

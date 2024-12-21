@@ -4,13 +4,19 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { BBRTChunk } from "../llm/chunk.js";
-import type { BBRTTurn } from "../llm/conversation.js";
-import type { BBRTTool } from "../tools/tool.js";
+import type { TurnChunk } from "../state/turn-chunk.js";
+import type { ReactiveTurnState } from "../state/turn.js";
+import type { BBRTTool } from "../tools/tool-types.js";
+import {
+  exponentialBackoff,
+  type ExponentialBackoffParameters,
+} from "../util/exponential-backoff.js";
+import type { JsonSerializableObject } from "../util/json-serializable.js";
 import type { Result } from "../util/result.js";
+import { resultify } from "../util/resultify.js";
 import { streamJsonArrayItems } from "../util/stream-json-array-items.js";
 import { adjustSchemaForGemini } from "./adjust-schema-for-gemini.js";
-import type { BBRTDriver } from "./driver-interface.js";
+import type { BBRTDriver, BBRTDriverSendOptions } from "./driver-interface.js";
 import type {
   GeminiContent,
   GeminiFunctionDeclaration,
@@ -20,7 +26,16 @@ import type {
   GeminiResponse,
 } from "./gemini-types.js";
 
+const BACKOFF_PARAMS: ExponentialBackoffParameters = {
+  budget: 30_000,
+  minDelay: 500,
+  maxDelay: 5000,
+  multiplier: 2,
+  jitter: 0.1,
+};
+
 export class GeminiDriver implements BBRTDriver {
+  readonly id = "gemini2";
   readonly name = "Gemini";
   readonly icon = "/bbrt/images/gemini-logomark.svg";
 
@@ -30,16 +45,27 @@ export class GeminiDriver implements BBRTDriver {
     this.#getApiKey = getApiKey;
   }
 
-  async executeTurn(
-    turns: BBRTTurn[],
-    tools: BBRTTool[]
-  ): Promise<Result<AsyncIterableIterator<BBRTChunk>>> {
-    const contents = await convertTurnsForGemini(turns);
+  async *send({
+    turns,
+    systemPrompt,
+    tools,
+  }: BBRTDriverSendOptions): AsyncIterable<TurnChunk> {
+    const contents = convertTurnsForGemini(turns);
+    if (!contents.ok) {
+      // TODO(aomarks) Send should return a Result.
+      throw new Error(String(contents.error));
+    }
     const request: GeminiRequest = {
-      contents,
+      contents: contents.value,
     };
-    if (tools.length > 0) {
-      request.tools = await convertToolsForGemini(tools);
+    if (systemPrompt.length > 0) {
+      request.systemInstruction = { parts: [{ text: systemPrompt }] };
+    }
+    if (tools !== undefined && tools.size > 0) {
+      request.tools = await convertToolsForGemini([...tools.values()]);
+      request.toolConfig = { functionCallingConfig: { mode: "auto" } };
+    } else {
+      request.toolConfig = { functionCallingConfig: { mode: "none" } };
     }
 
     const model = "gemini-1.5-pro";
@@ -54,67 +80,99 @@ export class GeminiDriver implements BBRTDriver {
       return { ok: false, error: Error("No Gemini API key was available") };
     }
     url.searchParams.set("key", apiKey.value);
-    let result;
-    try {
-      result = await fetch(url.href, {
-        method: "POST",
-        body: JSON.stringify(request),
-      });
-    } catch (e) {
-      return { ok: false, error: e as Error };
-    }
-    if (result.status !== 200) {
-      try {
-        const error = (await result.json()) as unknown;
+
+    const response = await (async (): Promise<Result<Response>> => {
+      const fetchRequest = { method: "POST", body: JSON.stringify(request) };
+      const retryDelays = exponentialBackoff(BACKOFF_PARAMS);
+      const startTime = performance.now();
+      for (let attempt = 0; ; attempt++) {
+        const result = await resultify(fetch(url.href, fetchRequest));
+        if (!result.ok) {
+          return result;
+        }
+        const response = result.value;
+        if (response.status === 200) {
+          return result;
+        }
+        const retryable = response.status === /* Too Many Requests */ 429;
+        if (retryable) {
+          const delay = retryDelays.next();
+          if (!delay.done) {
+            await new Promise((resolve) => setTimeout(resolve, delay.value));
+            continue;
+          }
+        }
+        const seconds = Math.ceil((performance.now() - startTime) / 1000);
+        const text = await resultify(result.value.text());
         return {
           ok: false,
           error: new Error(
-            `HTTP status ${result.status}` +
-              `\n\n${JSON.stringify(error, null, 2)}`
+            `Gemini API responded with HTTP status ${response.status}` +
+              (attempt > 0
+                ? ` after ${attempt + 1} attempts within ${seconds} seconds.`
+                : ".") +
+              (text.ok ? `\n\n${text.value}` : "")
           ),
         };
-      } catch {
-        return { ok: false, error: Error(`http status was ${result.status}`) };
       }
+    })();
+    if (!response.ok) {
+      throw new Error(String(response.error));
     }
-    const body = result.body;
+
+    const body = response.value.body;
     if (body === null) {
-      return { ok: false, error: Error("body was null") };
+      return {
+        ok: false,
+        error: Error("Gemini API response had null body"),
+      };
     }
-    const stream = convertGeminiChunks(
+    yield* convertGeminiChunks(
       streamJsonArrayItems<GeminiResponse>(
         body.pipeThrough(new TextDecoderStream())
       )
     );
-    return { ok: true, value: stream };
   }
 }
 
 async function* convertGeminiChunks(
   stream: AsyncIterable<GeminiResponse>
-): AsyncIterableIterator<BBRTChunk> {
+): AsyncIterableIterator<TurnChunk> {
   for await (const chunk of stream) {
-    // TODO(aomarks) Sometimes we get no parts, just a mostly empty message.
-    // That should probably generate an error, which should somehow appear on
-    // this stream.
-    const parts = chunk?.candidates?.[0]?.content?.parts;
+    // TODO(aomarks) A way to send errors down the stream, or a side-channel.
+    const candidate = chunk?.candidates?.[0];
+    const parts = candidate?.content?.parts;
+    if (candidate?.finishReason && candidate.finishReason !== "STOP") {
+      console.error(
+        `gemini chunk had finish reason ${candidate.finishReason}:` +
+          ` ${JSON.stringify(chunk)}`
+      );
+    }
     if (parts === undefined) {
       console.error(`gemini chunk had no parts: ${JSON.stringify(chunk)}`);
       continue;
     }
     for (const part of parts) {
       if ("text" in part) {
-        yield { kind: "append-content", content: part.text };
+        yield {
+          timestamp: Date.now(),
+          kind: "text",
+          text: part.text,
+        };
       } else if ("functionCall" in part) {
         yield {
-          kind: "tool-call",
+          kind: "function-call",
           // Gemini function calls don't have IDs, but OpenAI appears to require
           // them in the case where you have more than tool call in a turn. So
           // lets make one up that's similar to the OpenAI format so that we can
           // send Gemini responses to OpenAI.
-          id: randomOpenAIFunctionCallStyleId(),
-          name: part.functionCall.name,
-          arguments: part.functionCall.args,
+          timestamp: Date.now(),
+          call: {
+            callId: randomOpenAIFunctionCallStyleId(),
+            functionId: part.functionCall.name,
+            args: part.functionCall.args as JsonSerializableObject,
+            response: { status: "unstarted" },
+          },
         };
       } else {
         console.error(
@@ -125,72 +183,78 @@ async function* convertGeminiChunks(
   }
 }
 
-async function convertTurnsForGemini(
-  turns: BBRTTurn[]
-): Promise<GeminiContent[]> {
+export function convertTurnsForGemini(
+  turns: ReactiveTurnState[]
+): Result<GeminiContent[]> {
   const contents: GeminiContent[] = [];
   for (const turn of turns) {
-    if (turn.status.get() !== "done") {
-      continue;
+    if (turn.status !== "done") {
+      return {
+        ok: false,
+        error: Error(`Expected turn to be done, got ${turn.status}`),
+      };
     }
-    switch (turn.kind) {
-      case "user-content": {
-        contents.push({ role: "user", parts: [{ text: turn.content }] });
-        break;
-      }
-      case "user-tool-responses": {
+    if (turn.role === "user") {
+      contents.push({
+        role: "user",
+        parts: [{ text: turn.partialText }],
+      });
+    } else {
+      turn.role satisfies "model";
+      const functionCalls = turn.partialFunctionCalls;
+      if (functionCalls.length === 0) {
         contents.push({
-          role: "user",
-          parts: turn.responses.map((response) => ({
-            functionResponse: {
-              name: response.tool.metadata.id,
-              response: response.response.output,
-              // TOOD(aomarks) It really feels like we should also provide the
-              // arguments or an id, since we might have more than one call to
-              // the same tool. Maybe it uses the ordering (which we preserve),
-              // or maybe the LLM just figures it out from context most of the
-              // time anyway.
-            },
-          })),
+          role: "model",
+          parts: [{ text: turn.partialText }],
         });
-        break;
-      }
-      case "model": {
-        const text = (await Array.fromAsync(turn.content)).join("");
-        const content: GeminiContent = { role: "model", parts: [] };
-        if (text) {
-          content.parts.push({ text });
+      } else {
+        const modelParts: GeminiPart[] = [];
+        if (turn.partialText) {
+          modelParts.push({ text: turn.partialText });
         }
-        if (turn.toolCalls?.length) {
-          content.parts.push(
-            ...turn.toolCalls.map(
-              (toolCall): GeminiPart => ({
-                functionCall: {
-                  name: toolCall.tool.metadata.id,
-                  args: toolCall.args,
-                },
-              })
-            )
-          );
+        const userParts: GeminiPart[] = [];
+        for (const call of functionCalls) {
+          const status = call.response.status;
+          if (status === "unstarted" || status === "executing") {
+            return {
+              ok: false,
+              error: new Error(`Function call was ${status}.`),
+            };
+          }
+          status satisfies "success" | "error";
+          modelParts.push({
+            functionCall: {
+              name: call.functionId,
+              args: call.args,
+            },
+          });
+          userParts.push({
+            functionResponse: {
+              name: call.functionId,
+              response:
+                status === "success"
+                  ? call.response.result
+                  : { error: call.response.error.message },
+            },
+          });
         }
-        contents.push(content);
-        break;
-      }
-      case "error": {
-        // TODO(aomarks) Do something better?
-        break;
-      }
-      default: {
-        turn satisfies never;
-        console.error("Unknown turn kind:", turn);
-        break;
+        contents.push(
+          {
+            role: "model",
+            parts: modelParts,
+          },
+          {
+            role: "user",
+            parts: userParts,
+          }
+        );
       }
     }
   }
-  return contents;
+  return { ok: true, value: contents };
 }
 
-async function convertToolsForGemini(
+export async function convertToolsForGemini(
   tools: BBRTTool[]
 ): Promise<GeminiRequest["tools"]> {
   // TODO(aomarks) 1 tool with N functions works, but N tools with 1

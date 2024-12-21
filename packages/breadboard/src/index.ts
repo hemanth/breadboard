@@ -65,7 +65,12 @@ export type * from "./utils/typed-event-target.js";
 /**
  * Helpers for handling BreadboardCapability.
  */
-export { getGraphDescriptor } from "./capability.js";
+export {
+  getGraphDescriptor,
+  isGraphDescriptorCapability,
+  isResolvedURLBoardCapability,
+  isUnresolvedPathBoardCapability,
+} from "./capability.js";
 
 /**
  * The Inspector API.
@@ -131,7 +136,10 @@ export { runGraph } from "./run/run-graph.js";
 export { sequenceEntryToHarnessRunResult } from "./inspector/run/conversions.js";
 
 export { addSandboxedRunModule } from "./sandboxed-run-module.js";
-export { blankImperative } from "./run/run-imperative-graph.js";
+export {
+  blankImperative,
+  defaultModuleContent,
+} from "./run/run-imperative-graph.js";
 
 export { IsolateSelectionTransform } from "./editor/transforms/isolate-selection.js";
 export { MoveToGraphTransform } from "./editor/transforms/move-to-graph.js";

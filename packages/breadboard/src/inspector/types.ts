@@ -254,6 +254,10 @@ export type InspectableGraph = {
    */
   raw(): GraphDescriptor;
   /**
+   * Returns the main graph's descriptor
+   */
+  mainGraphDescriptor(): GraphDescriptor;
+  /**
    * Returns this graph's metadata, if exists.
    */
   metadata(): GraphMetadata | undefined;
@@ -274,10 +278,6 @@ export type InspectableGraph = {
    * Returns true if the edge exists in the graph.
    */
   hasEdge(edge: Edge): boolean;
-  /**
-   * Returns all kits in the graph.
-   */
-  kits(): InspectableKit[];
   /**
    * Returns all nodes of the given type.
    * @param type type of the nodes to find
@@ -676,7 +676,6 @@ export type InspectableDescriberResultCache = {
 export type InspectableKitCache = {
   getType(id: NodeTypeIdentifier): InspectableNodeType | undefined;
   addType(id: NodeTypeIdentifier, type: InspectableNodeType): void;
-  kits(): InspectableKit[];
   rebuild(graph: GraphDescriptor): void;
 };
 
@@ -691,21 +690,9 @@ export type InspectableGraphCache = {
 
 export type MainGraphIdentifier = UUID;
 
-export type GraphHandle = {
-  id: MainGraphIdentifier;
-} & (
-  | {
-      type: "declarative";
-      /**
-       * The value is "" for the main graph.
-       */
-      graphId: GraphIdentifier;
-    }
-  | {
-      type: "imperative";
-      moduleId: ModuleIdentifier;
-    }
-);
+export type GraphStoreEntry = NodeHandlerMetadata & {
+  mainGraph: NodeHandlerMetadata & { id: MainGraphIdentifier };
+};
 
 export type GraphStoreArgs = Required<InspectableGraphOptions>;
 
@@ -722,32 +709,58 @@ type GraphsStoreEventMap = {
 
 export type GraphStoreEventTarget = TypedEventTarget<GraphsStoreEventMap>;
 
-export type MutableGraphStore = TypedEventTargetType<GraphsStoreEventMap> & {
-  readonly kits: readonly Kit[];
-  readonly sandbox: Sandbox;
-  readonly loader: GraphLoader;
-
-  addByURL(
-    url: string,
-    dependencies: MainGraphIdentifier[],
-    context: GraphLoaderContext
-  ): MutableGraph;
-  addByDescriptor(graph: GraphDescriptor): Result<MainGraphIdentifier>;
-  editByDescriptor(
-    graph: GraphDescriptor,
-    options?: EditableGraphOptions
-  ): EditableGraph | undefined;
-  edit(
-    id: MainGraphIdentifier,
-    options?: EditableGraphOptions
-  ): EditableGraph | undefined;
-  inspect(
-    id: MainGraphIdentifier,
-    graphId: GraphIdentifier
-  ): InspectableGraph | undefined;
-
-  addKits(kits: Kit[], dependencies: MainGraphIdentifier[]): InspectableKit[];
+export type AddResult = {
+  mutable: MutableGraph;
+  graphId: GraphIdentifier;
+  // NEED THIS, because describing is different for graphs and modules
+  moduleId?: ModuleIdentifier;
 };
+
+export type MutableGraphStore = TypedEventTargetType<GraphsStoreEventMap> &
+  GraphLoader & {
+    readonly kits: readonly Kit[];
+    readonly sandbox: Sandbox;
+    readonly loader: GraphLoader;
+
+    graphs(): GraphStoreEntry[];
+
+    /**
+     * Registers a Kit with the GraphStore.
+     * Currently, only Kits that contain Graph URL-like types
+     * are support.
+     *
+     * @param kit - the kit to register
+     * @param dependences - known dependencies to this kit
+     */
+    registerKit(kit: Kit, dependences: MainGraphIdentifier[]): void;
+
+    addByURL(
+      url: string,
+      dependencies: MainGraphIdentifier[],
+      context: GraphLoaderContext
+    ): AddResult;
+
+    getLatest(mutable: MutableGraph): Promise<MutableGraph>;
+
+    addByDescriptor(graph: GraphDescriptor): Result<MainGraphIdentifier>;
+    getByDescriptor(graph: GraphDescriptor): Result<MainGraphIdentifier>;
+    editByDescriptor(
+      graph: GraphDescriptor,
+      options?: EditableGraphOptions
+    ): EditableGraph | undefined;
+    edit(
+      id: MainGraphIdentifier,
+      options?: EditableGraphOptions
+    ): EditableGraph | undefined;
+    inspect(
+      id: MainGraphIdentifier,
+      graphId: GraphIdentifier
+    ): InspectableGraph | undefined;
+    inspectSnapshot(
+      graph: GraphDescriptor,
+      graphId: GraphIdentifier
+    ): InspectableGraph | undefined;
+  };
 
 export type PortIdentifier = string;
 
@@ -782,6 +795,7 @@ export type InspectablePortCache = {
  */
 export type MutableGraph = {
   graph: GraphDescriptor;
+  legacyKitMetadata: KitDescriptor | null;
   readonly id: MainGraphIdentifier;
   readonly graphs: InspectableGraphCache;
   readonly store: MutableGraphStore;
@@ -1039,10 +1053,6 @@ export type InspectableRunEdge = {
  * Represents a single run of a graph.
  */
 export type InspectableRun = {
-  /**
-   * The id of the graph that was run.
-   */
-  mainGraphId: MainGraphIdentifier;
   /**
    * The version of the graph that was run.
    */

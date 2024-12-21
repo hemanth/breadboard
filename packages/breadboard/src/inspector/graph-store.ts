@@ -11,34 +11,43 @@ import {
   EditableGraphOptions,
   Result,
 } from "../editor/types.js";
-import { GraphLoader, GraphLoaderContext } from "../loader/types.js";
+import {
+  GraphLoader,
+  GraphLoaderContext,
+  GraphLoaderResult,
+} from "../loader/types.js";
 import { MutableGraphImpl } from "./graph/mutable-graph.js";
 import {
+  GraphStoreEntry,
   GraphStoreArgs,
   GraphStoreEventTarget,
   InspectableGraph,
   InspectableGraphOptions,
-  InspectableKit,
   MainGraphIdentifier,
   MutableGraph,
   MutableGraphStore,
+  AddResult,
 } from "./types.js";
 import { hash } from "../utils/hash.js";
-import { Kit, NodeHandlerContext } from "../types.js";
+import { Kit, NodeHandlerContext, NodeHandlerMetadata } from "../types.js";
 import { Sandbox } from "@breadboard-ai/jsandbox";
 import { createLoader } from "../loader/index.js";
 import { SnapshotUpdater } from "../utils/snapshot-updater.js";
 import { UpdateEvent } from "./graph/event.js";
-import { collectCustomNodeTypes } from "./graph/kits.js";
+import { createBuiltInKit } from "./graph/kits.js";
+import { graphUrlLike } from "../utils/graph-url-like.js";
+import { getGraphUrl, getGraphUrlComponents } from "../loader/loader.js";
 
-export { GraphStore, makeTerribleOptions, contextFromStore };
+export { GraphStore, makeTerribleOptions, contextFromMutableGraph };
 
-function contextFromStore(store: MutableGraphStore): NodeHandlerContext {
+function contextFromMutableGraph(mutable: MutableGraph): NodeHandlerContext {
+  const store = mutable.store;
   return {
     kits: [...store.kits],
     loader: store.loader,
     sandbox: store.sandbox,
     graphStore: store,
+    outerGraph: mutable.graph,
   };
 }
 
@@ -65,6 +74,8 @@ class GraphStore
   readonly sandbox: Sandbox;
   readonly loader: GraphLoader;
 
+  #legacyKits: GraphStoreEntry[];
+
   #mainGraphIds: Map<string, MainGraphIdentifier> = new Map();
   #mutables: Map<MainGraphIdentifier, SnapshotUpdater<MutableGraph>> =
     new Map();
@@ -75,10 +86,136 @@ class GraphStore
     this.kits = args.kits;
     this.sandbox = args.sandbox;
     this.loader = args.loader;
+    this.#legacyKits = this.#populateLegacyKits(args.kits);
+  }
+
+  graphs(): GraphStoreEntry[] {
+    const graphs = [...this.#mutables.entries()]
+      .flatMap(([mainGraphId, snapshot]) => {
+        const mutable = snapshot.current();
+        const descriptor = mutable.graph;
+        // TODO: Support exports and main module
+        const mainGraphMetadata = filterEmptyValues({
+          title: descriptor.title,
+          description: descriptor.description,
+          icon: descriptor.metadata?.icon,
+          url: descriptor.url,
+          tags: descriptor.metadata?.tags,
+          help: descriptor.metadata?.help,
+          id: mainGraphId,
+        });
+        return {
+          mainGraph: mutable.legacyKitMetadata || mainGraphMetadata,
+          ...mainGraphMetadata,
+        };
+      })
+      .filter(Boolean) as GraphStoreEntry[];
+    return [...this.#legacyKits, ...graphs];
+  }
+
+  async load(
+    path: string,
+    context: GraphLoaderContext
+  ): Promise<GraphLoaderResult> {
+    // Add loading graph as a dependency.
+    const dependencies: MainGraphIdentifier[] = [];
+    if (context) {
+      const url = context.outerGraph?.url;
+      if (url) {
+        const outerMutable = this.addByURL(url, [], context);
+        dependencies.push(outerMutable.mutable.id);
+      }
+    }
+
+    const result = this.addByURL(path, dependencies, context);
+    try {
+      const mutable = await this.getLatest(result.mutable);
+      return {
+        success: true,
+        graph: mutable.graph,
+        subGraphId: result.graphId,
+        moduleId: result.moduleId,
+      };
+    } catch (e) {
+      return {
+        success: false,
+        error: (e as Error).message,
+      };
+    }
+  }
+
+  #populateLegacyKits(kits: Kit[]) {
+    kits = [...kits, createBuiltInKit()];
+    const all = kits.flatMap((kit) =>
+      Object.entries(kit.handlers).map(([type, handler]) => {
+        let metadata: NodeHandlerMetadata =
+          "metadata" in handler ? handler.metadata || {} : {};
+        const mainGraphTags = [...(kit.tags || [])];
+        if (metadata.deprecated) {
+          mainGraphTags.push("deprecated");
+          metadata = { ...metadata };
+          delete metadata.deprecated;
+        }
+        const tags = [...(metadata.tags || []), "component"];
+        return [
+          type,
+          {
+            url: type,
+            mainGraph: filterEmptyValues({
+              title: kit.title,
+              description: kit.description,
+              tags: mainGraphTags,
+            }),
+            ...metadata,
+            tags,
+          },
+        ] as [type: string, info: GraphStoreEntry];
+      })
+    );
+    return Object.values(
+      all.reduce(
+        (collated, [type, info]) => {
+          // Intentionally do the reverse of what goes on
+          // in `handlersFromKits`: last info wins,
+          // because here, we're collecting info, rather
+          // than handlers and the last info is the one
+          // that typically has the right stuff.
+          return { ...collated, [type]: info };
+        },
+        {} as Record<string, GraphStoreEntry>
+      )
+    );
+  }
+
+  registerKit(kit: Kit, dependences: MainGraphIdentifier[]): void {
+    Object.keys(kit.handlers).forEach((type) => {
+      if (graphUrlLike(type)) {
+        const mutable = this.addByURL(type, dependences, {}).mutable;
+        mutable.legacyKitMetadata = filterEmptyValues({
+          url: kit.url,
+          title: kit.title,
+          description: kit.description,
+          tags: kit.tags,
+          id: mutable.id,
+        });
+      } else {
+        throw new Error(
+          `The type "${type}" is not Graph URL-like, unable to add this kit`
+        );
+      }
+    });
   }
 
   addByDescriptor(graph: GraphDescriptor): Result<MainGraphIdentifier> {
-    const getting = this.getOrAdd(graph);
+    const getting = this.getOrAdd(graph, true);
+    if (!getting.success) {
+      return getting;
+    }
+    return { success: true, result: getting.result.id };
+  }
+
+  getByDescriptor(graph: GraphDescriptor): Result<MainGraphIdentifier> {
+    const getting = this.getOrAdd(graph, false);
     if (!getting.success) {
       return getting;
     }
@@ -89,7 +226,7 @@ class GraphStore
     graph: GraphDescriptor,
     options: EditableGraphOptions = {}
   ): EditableGraph | undefined {
-    const result = this.getOrAdd(graph);
+    const result = this.getOrAdd(graph, true);
     if (!result.success) {
       console.error(`Failed to edityByDescriptor: ${result.error}`);
       return undefined;
@@ -117,22 +254,41 @@ class GraphStore
     return mutable.graphs.get(graphId);
   }
 
+  inspectSnapshot(
+    graph: GraphDescriptor,
+    graphId: GraphIdentifier
+  ): InspectableGraph | undefined {
+    const immutable = this.#snapshotFromGraphDescriptor(graph).current();
+    return immutable.graphs.get(graphId);
+  }
+
   addByURL(
-    url: string,
+    path: string,
     dependencies: MainGraphIdentifier[],
     context: GraphLoaderContext = {}
-  ): MutableGraph {
-    const id = this.#mainGraphIds.get(url);
+  ): AddResult {
+    const { mainGraphUrl, graphId, moduleId } = getGraphUrlComponents(
+      getGraphUrl(path, context)
+    );
+    const id = this.#mainGraphIds.get(mainGraphUrl);
     if (id) {
       this.#addDependencies(id, dependencies);
-      return this.#mutables.get(id)!.current();
+      return { mutable: this.#mutables.get(id)!.current(), graphId, moduleId };
     }
-    const snapshot = this.#snapshotFromUrl(url, context);
+    const snapshot = this.#snapshotFromUrl(mainGraphUrl, context);
     const mutable = snapshot.current();
     this.#mutables.set(mutable.id, snapshot);
-    this.#mainGraphIds.set(url, mutable.id);
+    this.#mainGraphIds.set(mainGraphUrl, mutable.id);
     this.#addDependencies(mutable.id, dependencies);
-    return mutable;
+    return { mutable, graphId, moduleId };
+  }
+
+  async getLatest(mutable: MutableGraph): Promise<MutableGraph> {
+    const snapshot = this.#mutables.get(mutable.id);
+    if (!snapshot) {
+      return mutable;
+    }
+    return snapshot.latest();
   }
 
   #addDependencies(
@@ -151,7 +307,7 @@ class GraphStore
     });
   }
 
-  getOrAdd(graph: GraphDescriptor): Result<MutableGraph> {
+  getOrAdd(graph: GraphDescriptor, sameCheck: boolean): Result<MutableGraph> {
     let url = graph.url;
     let graphHash: number | null = null;
     if (!url) {
@@ -166,7 +322,10 @@ class GraphStore
       if (!existing) {
         return error(`Integrity error: main graph "${id}" not found in store.`);
       }
-      const same = graphHash !== null || hash(existing.graph) === hash(graph);
+      const same =
+        !sameCheck ||
+        graphHash !== null ||
+        hash(existing.graph) === hash(graph);
       if (!same) {
         // When not the same, rebuild the graph on the MutableGraphImpl.
         existing.rebuild(graph);
@@ -241,23 +400,6 @@ class GraphStore
   get(id: MainGraphIdentifier): MutableGraph | undefined {
     return this.#mutables.get(id)?.current();
   }
-
-  addKits(kits: Kit[], dependencies: MainGraphIdentifier[]): InspectableKit[] {
-    return [
-      ...kits.map((kit) => {
-        const descriptor = {
-          title: kit.title,
-          description: kit.description,
-          url: kit.url,
-          tags: kit.tags || [],
-        };
-        return {
-          descriptor,
-          nodeTypes: collectCustomNodeTypes(kit.handlers, dependencies, this),
-        };
-      }),
-    ];
-  }
 }
 
 function error<T>(message: string): Result<T> {
@@ -272,4 +414,17 @@ function emptyGraph(): GraphDescriptor {
     edges: [],
     nodes: [],
   };
+}
+
+/**
+ * A utility function to filter out empty (null or undefined) values from
+ * an object.
+ *
+ * @param obj -- The object to filter.
+ * @returns -- The object with empty values removed.
+ */
+function filterEmptyValues<T extends Record<string, unknown>>(obj: T): T {
+  return Object.fromEntries(
+    Object.entries(obj).filter(([, value]) => !!value)
+  ) as T;
 }

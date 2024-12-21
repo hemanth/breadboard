@@ -10,13 +10,16 @@ export interface GeminiRequest {
     functionDeclarations: GeminiFunctionDeclaration[];
   }>;
   toolConfig?: {
-    mode: "auto" | "any" | "none";
-    allowedFunctionNames: string[];
+    functionCallingConfig?: {
+      mode: "auto" | "any" | "none";
+      allowedFunctionNames?: string[];
+    };
   };
+  systemInstruction?: GeminiContent;
 }
 
 export interface GeminiContent {
-  role: "user" | "model";
+  role?: "user" | "model";
   parts: GeminiPart[];
 }
 
@@ -48,7 +51,8 @@ export interface GeminiResponse {
 }
 
 export interface GeminiCandidate {
-  content: GeminiContent;
+  finishReason?: string;
+  content?: GeminiContent;
 }
 
 export interface GeminiFunctionDeclaration {

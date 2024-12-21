@@ -97,7 +97,7 @@
     "vite": "^6.0.2",
     "vite-plugin-full-reload": "^1.2.0",
     "vite-plugin-watch-and-run": "^1.7.0",
-    "vitest": "^2.1.5"
+    "vitest": "^2.1.8"
   },
   "dependencies": {
     "@breadboard-ai/build": "0.11.0",
@@ -105,7 +105,7 @@
     "@breadboard-ai/data-store": "0.2.6",
     "@breadboard-ai/jsandbox": "0.2.0",
     "@breadboard-ai/types": "0.3.0",
-    "@codemirror/autocomplete": "^6.18.3",
+    "@codemirror/autocomplete": "^6.18.4",
     "@codemirror/commands": "^6.7.1",
     "@codemirror/lang-javascript": "^6.2.2",
     "@codemirror/lang-json": "^6.0.1",
@@ -131,6 +131,6 @@
     "idb-keyval": "^6.2.1",
     "lit": "^3.2.1",
     "markdown-it": "^14.1.0",
-    "pixi.js": "^8.5.2"
+    "pixi.js": "^8.6.5"
   }
 }

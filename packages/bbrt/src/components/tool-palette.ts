@@ -8,18 +8,13 @@ import { SignalWatcher } from "@lit-labs/signals";
 import { LitElement, css, html, nothing } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { classMap } from "lit/directives/class-map.js";
-import type { SignalArray } from "signal-utils/array";
-import type { SignalSet } from "signal-utils/set";
-import type { ToolProvider } from "../tools/tool-provider.js";
-import type { BBRTTool } from "../tools/tool.js";
+import type { Conversation } from "../llm/conversation.js";
+import type { BBRTTool } from "../tools/tool-types.js";
 
 @customElement("bbrt-tool-palette")
 export class BBRTToolPalette extends SignalWatcher(LitElement) {
   @property({ attribute: false })
-  toolProviders?: SignalArray<ToolProvider>;
-
-  @property({ attribute: false })
-  activeTools?: SignalSet<BBRTTool>;
+  accessor conversation: Conversation | undefined = undefined;
 
   static override styles = css`
     :host {
@@ -46,10 +41,6 @@ export class BBRTToolPalette extends SignalWatcher(LitElement) {
     :first-child {
       margin-top: 0;
     }
-    h3 {
-      font-weight: normal;
-      color: #666;
-    }
     img {
       height: 16px;
       max-width: 16px;
@@ -60,44 +51,59 @@ export class BBRTToolPalette extends SignalWatcher(LitElement) {
   `;
 
   override render() {
-    if (this.toolProviders === undefined) {
+    if (this.conversation === undefined) {
+      return nothing;
+    }
+    const { availableTools } = this.conversation;
+    if (availableTools === undefined) {
       return nothing;
     }
     return html`
       <ul>
-        ${this.toolProviders.map(this.#renderProviders)}
+        ${availableTools.values().map(this.#renderTool)}
       </ul>
     `;
   }
 
-  #renderProviders = (provider: ToolProvider) => html`
-    <h3>${provider.name}</h3>
-    <ul>
-      ${provider.tools().map(this.#renderTool)}
-    </ul>
-  `;
-
-  #renderTool = (tool: BBRTTool) => html`
-    <li class=${classMap({ active: this.activeTools?.has(tool) ?? false })}>
-      <a href="#" @click=${(event: MouseEvent) => this.#clickTool(event, tool)}>
-        ${tool.metadata.icon
-          ? html`<img src=${tool.metadata.icon} alt="" />`
-          : nothing}
-        ${tool.metadata.title}
-      </a>
-    </li>
-  `;
+  #renderTool = (tool: BBRTTool) => {
+    if (this.conversation === undefined) {
+      return nothing;
+    }
+    return html`
+      <li
+        class=${classMap({
+          active: this.conversation.activeToolIds?.has(tool.metadata.id),
+        })}
+      >
+        <a
+          href="#"
+          @click=${(event: MouseEvent) => this.#clickTool(event, tool)}
+        >
+          ${tool.metadata.icon
+            ? html`<img src=${tool.metadata.icon} alt="" />`
+            : nothing}
+          ${tool.metadata.title}
+        </a>
+      </li>
+    `;
+  };
 
   #clickTool(event: MouseEvent, tool: BBRTTool) {
     event.preventDefault();
     event.stopImmediatePropagation();
-    if (this.activeTools === undefined) {
+    if (this.conversation === undefined) {
       return;
     }
-    if (this.activeTools.has(tool)) {
-      this.activeTools.delete(tool);
+    const clickedToolId = tool.metadata.id;
+    if (this.conversation.activeToolIds.has(clickedToolId)) {
+      this.conversation.activeToolIds = [
+        ...this.conversation.activeToolIds,
+      ].filter((id) => id !== clickedToolId);
     } else {
-      this.activeTools.add(tool);
+      this.conversation.activeToolIds = [
+        ...this.conversation.activeToolIds,
+        clickedToolId,
+      ];
     }
   }
 }

@@ -7,22 +7,18 @@
 import { SignalWatcher } from "@lit-labs/signals";
 import { LitElement, css, html } from "lit";
 import { customElement, property } from "lit/decorators.js";
-import type { BBRTConversation } from "../llm/conversation.js";
+import type { Conversation } from "../llm/conversation.js";
 import "./chat-message.js";
-
-type ScrollState =
-  | { status: "locked" }
-  | { status: "auto"; intervalId: number };
+import { ScrollController } from "./scroll-controller.js";
 
 @customElement("bbrt-chat")
 export class BBRTChat extends SignalWatcher(LitElement) {
   @property({ attribute: false })
-  conversation?: BBRTConversation;
-
-  #scrollState: ScrollState;
+  accessor conversation: Conversation | undefined = undefined;
 
   static override styles = css`
     :host {
+      display: block;
       padding: 16px;
       overflow-y: auto;
       background: #fafdff;
@@ -31,36 +27,7 @@ export class BBRTChat extends SignalWatcher(LitElement) {
 
   constructor() {
     super();
-
-    // TODO(aomarks) Turn auto-scrolling into a directive. Also, be a smarter
-    // scroller.
-    const autoScroll = (): number =>
-      // TODO(aomarks) Cast because we're including node types, which have has a
-      // different return type for setInterval than the web.
-      setInterval(() => {
-        this.scrollTo({ top: Number.MAX_SAFE_INTEGER, behavior: "smooth" });
-      }, 500) as unknown as number;
-    this.#scrollState = {
-      status: "auto",
-      intervalId: autoScroll(),
-    };
-    let prevScrollTop = 0;
-    this.addEventListener("scroll", () => {
-      const scrolledUp = this.scrollTop < prevScrollTop;
-      if (this.#scrollState.status === "auto") {
-        if (scrolledUp) {
-          clearInterval(this.#scrollState.intervalId);
-          this.#scrollState = { status: "locked" };
-        }
-      } else {
-        const scrolledToBottom =
-          this.scrollTop + this.clientHeight >= this.scrollHeight;
-        if (scrolledToBottom) {
-          this.#scrollState = { status: "auto", intervalId: autoScroll() };
-        }
-      }
-      prevScrollTop = this.scrollTop;
-    });
+    new ScrollController(this, this);
   }
 
   override render() {
@@ -68,7 +35,6 @@ export class BBRTChat extends SignalWatcher(LitElement) {
       return html`Connecting...`;
     }
     const turns = this.conversation.turns;
-    // .filter(({kind}) => kind !== 'user-tool-responses');
     return this.conversation.turns.map(
       (turn, i) =>
         html`<bbrt-chat-message
@@ -81,10 +47,7 @@ export class BBRTChat extends SignalWatcher(LitElement) {
             // actually be nice, though, because it's ambiguous sometimes if
             // e.g. one turn had multiple tool calls, or there was a sequence of
             // tool calls.
-            turn.role === turns[i - 1]?.role ||
-            // TODO(aomarks) Maybe just get rid of error turn, and put errors on
-            // the turns they are associated with?
-            turn.kind === "error"
+            turn.role === turns[i - 1]?.role
           }
         ></bbrt-chat-message>`
     );

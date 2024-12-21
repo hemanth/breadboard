@@ -7,15 +7,7 @@
 import { SignalWatcher } from "@lit-labs/signals";
 import { LitElement, css, html, nothing } from "lit";
 import { customElement, property } from "lit/decorators.js";
-import { guard } from "lit/directives/guard.js";
-import type {
-  BBRTErrorTurn,
-  BBRTModelTurn,
-  BBRTTurn,
-  BBRTUserTurnContent,
-  BBRTUserTurnToolResponses,
-} from "../llm/conversation.js";
-import { typingEffect } from "../util/typing-effect.js";
+import type { ReactiveTurnState } from "../state/turn.js";
 import "./error-message.js";
 import "./markdown.js";
 import "./tool-call.js";
@@ -23,10 +15,10 @@ import "./tool-call.js";
 @customElement("bbrt-chat-message")
 export class BBRTChatMessage extends SignalWatcher(LitElement) {
   @property({ type: Object })
-  turn?: BBRTTurn;
+  accessor turn: ReactiveTurnState | undefined = undefined;
 
   @property({ type: Boolean })
-  hideIcon = false;
+  accessor hideIcon = false;
 
   static override styles = css`
     :host {
@@ -92,7 +84,7 @@ export class BBRTChatMessage extends SignalWatcher(LitElement) {
       display: grid;
       gap: 18px;
       grid-template-columns: repeat(auto-fill, 300px);
-      /* Space for shadows to breath on the bottom row. */
+      /* Space for shadows to breathe on the bottom row. */
       padding-bottom: 5px;
     }
     #toolResponses > img {
@@ -101,91 +93,47 @@ export class BBRTChatMessage extends SignalWatcher(LitElement) {
   `;
 
   override render() {
-    const turn = this.turn;
-    switch (turn?.kind) {
-      case undefined: {
-        return nothing;
-      }
-      case "user-content": {
-        return this.#renderUserContent(turn);
-      }
-      case "user-tool-responses": {
-        return this.#renderUserToolResponses(turn);
-      }
-      case "model": {
-        return this.#renderModelResponse(turn);
-      }
-      case "error": {
-        return this.#renderError(turn);
-      }
-      default: {
-        turn satisfies never;
-        return nothing;
-      }
-    }
-  }
-
-  #renderUserContent(turn: BBRTUserTurnContent) {
-    return [this.#roleIcon, html`<div id="userContent">${turn.content}</div>`];
-  }
-
-  #renderUserToolResponses(turn: BBRTUserTurnToolResponses) {
-    return [
-      this.#roleIcon,
-      html`<div part="contents">
-        <div id="toolResponses">
-          ${turn.responses.map(({ invocation }) => invocation.renderContent())}
-        </div>
-      </div>`,
-    ];
-  }
-
-  #renderModelResponse(turn: BBRTModelTurn) {
-    const content =
-      typeof turn.content === "string"
-        ? turn.content
-        : guard(turn.content, () => typingEffect(5, turn.content));
-    const toolCalls = turn.toolCalls?.length
-      ? html`<div id="toolCalls" part="content">
-          ${turn.toolCalls?.map(
-            (toolCall) =>
-              html`<bbrt-tool-call .toolCall=${toolCall}></bbrt-tool-call>`
-          ) ?? []}
-        </div>`
-      : "";
-    return [
-      this.#roleIcon,
-      html`<div part="contents">
-        <bbrt-markdown .markdown=${content} part="content"></bbrt-markdown>
-        ${toolCalls}
-      </div>`,
-    ];
-  }
-
-  #renderError(turn: BBRTErrorTurn) {
-    return [
-      this.#roleIcon,
-      html`<div part="contents">
-        <bbrt-error-message
-          part="content"
-          .error=${turn.error}
-        ></bbrt-error-message>
-      </div>`,
-    ];
-  }
-
-  get #roleIcon() {
+    // return html`<pre>${JSON.stringify(this.turn?.data ?? {}, null, 2)}</pre>`;
     if (!this.turn) {
       return nothing;
     }
-    const { kind, role, status } = this.turn;
-    if (this.hideIcon || kind === "user-tool-responses" || kind === "error") {
-      return html`<span part="icon"></span>`;
+    return [
+      this.#roleIcon,
+      html`
+        <div part="contents">
+          <bbrt-markdown
+            .markdown=${this.turn.partialText}
+            part="content"
+          ></bbrt-markdown>
+        </div>
+      `,
+      this.#renderFunctionCalls(),
+    ];
+  }
+
+  #renderFunctionCalls() {
+    const calls = this.turn?.partialFunctionCalls;
+    if (!calls?.length) {
+      return nothing;
     }
+    return html`<div id="toolCalls" part="content">
+      ${calls.map((call) =>
+        call.render
+          ? call.render()
+          : html`<bbrt-tool-call .toolCall=${call}></bbrt-tool-call>`
+      )}
+    </div>`;
+  }
+
+  get #roleIcon() {
+    if (!this.turn || this.hideIcon) {
+      return nothing;
+    }
+    const role = this.turn.role;
     return html`<svg
       aria-label="${role}"
       role="img"
-      part="icon icon-${role} icon-${status.get()}"
+      part="icon icon-${role} icon-${this.turn.status}"
     >
       <use href="/bbrt/images/${role}.svg#icon"></use>
     </svg>`;

@@ -1,6 +1,6 @@
 {
   "name": "@breadboard-ai/visual-editor",
-  "version": "1.23.0",
+  "version": "1.24.2",
   "description": "The Visual Editor for Breadboard",
   "main": "./build/index.js",
   "exports": {
@@ -320,10 +320,10 @@
     "vite": "^6.0.2",
     "vite-plugin-full-reload": "^1.2.0",
     "vite-plugin-watch-and-run": "^1.7.0",
-    "vitest": "^2.1.5"
+    "vitest": "^2.1.8"
   },
   "dependencies": {
-    "@breadboard-ai/bbrt": "^0.0.1",
+    "@breadboard-ai/bbrt": "0.0.1",
     "@breadboard-ai/board-server-management": "1.19.1",
     "@breadboard-ai/board-server-utils": "0.1.6",
     "@breadboard-ai/build": "0.11.0",
@@ -336,7 +336,7 @@
     "@breadboard-ai/python-wasm": "0.1.11",
     "@breadboard-ai/shared-ui": "1.21.0",
     "@breadboard-ai/types": "0.3.0",
-    "@codemirror/autocomplete": "^6.18.3",
+    "@codemirror/autocomplete": "^6.18.4",
     "@codemirror/commands": "^6.7.1",
     "@codemirror/lang-javascript": "^6.2.2",
     "@dagrejs/dagre": "^1.1.4",
@@ -359,7 +359,7 @@
     "idb-keyval": "^6.2.1",
     "lit": "^3.2.1",
     "markdown-it": "^14.1.0",
-    "pixi.js": "^8.5.2",
+    "pixi.js": "^8.6.5",
     "prettier": "^3.4.1"
   }
 }

@@ -5,9 +5,10 @@
  */
 
 import { toNodeHandlerMetadata } from "../../graph-based-node-handler.js";
-import { getGraphHandlerFromStore } from "../../handler.js";
+import { getGraphHandlerFromMutableGraph } from "../../handler.js";
 import {
   GraphDescriptor,
+  Kit,
   NodeDescriberResult,
   NodeDescriptor,
   NodeHandler,
@@ -30,9 +31,56 @@ import {
 import { collectPortsForType, filterSidePorts } from "./ports.js";
 import { describeInput, describeOutput } from "./schemas.js";
 
-export { KitCache, collectCustomNodeTypes };
+export { KitCache, collectCustomNodeTypes, createBuiltInKit };
 
-const createBuiltInKit = (): InspectableKit => {
+function unreachableCode() {
+  return function () {
+    throw new Error("This code should be never reached.");
+  };
+}
+
+function createBuiltInKit(): Kit {
+  return {
+    title: "Built-in Kit",
+    description: "A kit containing built-in Breadboard nodes",
+    url: "",
+    handlers: {
+      input: {
+        metadata: {
+          title: "Input",
+          description:
+            "The input node. Use it to request inputs for your board.",
+          help: {
+            url: "https://breadboard-ai.github.io/breadboard/docs/reference/kits/built-in/#the-input-node",
+          },
+        },
+        invoke: unreachableCode(),
+      },
+      output: {
+        metadata: {
+          title: "Output",
+          description:
+            "The output node. Use it to provide outputs from your board.",
+          help: {
+            url: "https://breadboard-ai.github.io/breadboard/docs/reference/kits/built-in/#the-output-node",
+          },
+        },
+        invoke: unreachableCode(),
+      },
+      comment: {
+        metadata: {
+          description:
+            "A comment node. Use this to put additional information on your board",
+          title: "Comment",
+          icon: "edit",
+        },
+        invoke: unreachableCode(),
+      },
+    },
+  };
+}
+
+const createBuiltInInspectableKit = (): InspectableKit => {
   return {
     descriptor: {
       title: "Built-in Kit",
@@ -89,7 +137,7 @@ export const collectKits = (
 ): InspectableKit[] => {
   const kits = mutable.store.kits;
   return [
-    createBuiltInKit(),
+    createBuiltInInspectableKit(),
     ...createCustomTypesKit(graph.nodes, mutable),
     ...kits.map((kit) => {
       const descriptor = {
@@ -115,7 +163,7 @@ function collectCustomNodeTypes(
     .sort()
     .map((type) => {
       if (graphUrlLike(type)) {
-        const mutable = store.addByURL(type, dependencies, {});
+        const mutable = store.addByURL(type, dependencies, {}).mutable;
         return new CustomNodeType(type, mutable);
       }
       throw new Error(`Unknown custom node type: ${type}`);
@@ -246,7 +294,7 @@ class CustomNodeType implements InspectableNodeType {
   constructor(type: string, mutable: MutableGraph) {
     this.#type = type;
     this.#mutable = mutable;
-    this.#handlerPromise = getGraphHandlerFromStore(type, mutable.store);
+    this.#handlerPromise = getGraphHandlerFromMutableGraph(type, mutable);
   }
 
   async #readMetadata() {
@@ -260,11 +308,9 @@ class CustomNodeType implements InspectableNodeType {
   }
 
   currentMetadata(): NodeHandlerMetadata {
-    const graph = this.#mutable.store.addByURL(
-      this.#type,
-      [this.#mutable.id],
-      {}
-    );
+    const graph = this.#mutable.store.addByURL(this.#type, [this.#mutable.id], {
+      outerGraph: this.#mutable.graph,
+    }).mutable;
     return toNodeHandlerMetadata(graph.graph);
   }
 
@@ -285,7 +331,6 @@ class CustomNodeType implements InspectableNodeType {
 
 class KitCache implements InspectableKitCache {
   #types: Map<NodeTypeIdentifier, InspectableNodeType> = new Map();
-  #kits: InspectableKit[] = [];
   #mutable: MutableGraph;
 
   constructor(mutable: MutableGraph) {
@@ -299,16 +344,11 @@ class KitCache implements InspectableKitCache {
     this.#types.set(id, type);
   }
 
-  kits(): InspectableKit[] {
-    return this.#kits;
-  }
-
   rebuild(graph: GraphDescriptor) {
     const kits = collectKits(this.#mutable, graph);
 
     this.#types = new Map(
       kits.flatMap((kit) => kit.nodeTypes.map((type) => [type.type(), type]))
     );
-    this.#kits = kits;
   }
 }
